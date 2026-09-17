@@ -16,6 +16,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.storage.postgres.models_business import ConfigOption
+from yuxi.models.providers.builtin import RETIRED_CHAT_PROVIDER_IDS
 from yuxi.storage.redis import get_async_redis_client
 from yuxi.utils.logging_config import logger
 
@@ -95,13 +96,13 @@ system_options = Option(
                 "key": "default_model",
                 "label": "默认对话模型",
                 "type": "model",
-                "default": "siliconflow-cn:deepseek-ai/DeepSeek-V4-Flash",
+                "default": "",
             },
             {
                 "key": "fast_model",
                 "label": "快速响应模型",
                 "type": "model",
-                "default": "siliconflow-cn:deepseek-ai/DeepSeek-V4-Flash",
+                "default": "",
             },
             {
                 "key": "embed_model",
@@ -269,6 +270,12 @@ async def ensure_options_in_db(db: AsyncSession) -> list[ConfigOption]:
                     (record.params or {}).get(SYSTEM_OPTIONS_MIGRATION_VERSION_PARAM) or 0
                 )
             record.params = params
+            if definition.key == system_options.key:
+                values = dict(record.value or {})
+                for field in ("default_model", "fast_model"):
+                    if str(values.get(field) or "").partition(":")[0] in RETIRED_CHAT_PROVIDER_IDS:
+                        values[field] = ""
+                record.value = values
         synced.append(record)
     await db.flush()
     return synced

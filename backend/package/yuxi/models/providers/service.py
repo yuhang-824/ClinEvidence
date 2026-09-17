@@ -7,9 +7,15 @@ import re
 from typing import Any
 
 import httpx
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from yuxi.models.providers.builtin import BUILTIN_PROVIDERS
+from yuxi.models.providers.builtin import (
+    BUILTIN_PROVIDERS,
+    LOCAL_PROVIDER_IDS,
+    RETIRED_PROVIDER_IDS,
+    RETIRED_CHAT_PROVIDER_IDS,
+)
 from yuxi.models.providers.repository import (
     create_model_provider,
     delete_model_provider,
@@ -18,6 +24,7 @@ from yuxi.models.providers.repository import (
     update_model_provider,
 )
 from yuxi.storage.postgres.models_business import ModelProvider
+from yuxi.utils import get_docker_safe_url
 
 VALID_MODEL_TYPES = {"chat", "embedding", "rerank"}
 VALID_MODEL_SOURCES = {"manual", "remote"}
@@ -208,6 +215,18 @@ def _normalize_payload(data: dict[str, Any], *, partial: bool = False) -> dict[s
         if capabilities_set:
             _validate_models_capabilities(payload.get("enabled_models"), capabilities_set)
 
+    if payload.get("provider_id") in RETIRED_CHAT_PROVIDER_IDS:
+        if "chat" in payload.get("capabilities", []) or any(
+            m["type"] == "chat" for m in payload.get("enabled_models", [])
+        ):
+            raise ValueError("该线上聊天供应商已移除；仅保留 Embedding 和重排，聊天请使用 DeepSeek 或 MiniMax 国内")
+        if (
+            not partial
+            and payload["provider_id"] in RETIRED_PROVIDER_IDS
+            and not set(payload.get("capabilities", [])) & {"embedding", "rerank"}
+        ):
+            raise ValueError("该线上供应商已移除；如需向量服务请明确配置 Embedding 或重排能力")
+
     if not partial:
         _validate_request_body_overrides_scope(payload.get("enabled_models"), payload.get("provider_type"))
 
@@ -220,6 +239,9 @@ def resolve_api_key(provider: ModelProvider) -> str | None:
         return provider.api_key
     if provider.api_key_env:
         return os.getenv(provider.api_key_env)
+    # OpenAI SDK 要求非空 key；本地服务未启用鉴权时仅使用占位值。
+    if provider.provider_id in LOCAL_PROVIDER_IDS:
+        return "local-no-auth"
     return None
 
 
@@ -231,7 +253,7 @@ def check_credential_status(provider: ModelProvider) -> str:
         return "ok"
     if provider.api_key_env:
         return "ok" if os.getenv(provider.api_key_env) else "warning"
-    return "warning"
+    return "ok" if getattr(provider, "provider_id", None) in LOCAL_PROVIDER_IDS else "warning"
 
 
 def _models_url(base_url: str, endpoint: str | None = None) -> str:
@@ -287,20 +309,35 @@ async def get_model_provider_by_id(db: AsyncSession, provider_id: str) -> ModelP
 async def ensure_builtin_model_providers_in_db(db: AsyncSession) -> None:
     """确保独立模型配置模块的内置 provider 模板存在。
 
-    这里只补不存在的内置 provider，不覆盖管理员已编辑的配置。
+    退役聊天能力，保留所有已有向量配置；补齐缺失模板和旧内置地址。
     """
-    existing = await list_model_providers(db)
+    if db.bind and db.bind.dialect.name == "postgresql":
+        await db.execute(text("SELECT pg_advisory_xact_lock(94721802)"))
+    existing = await list_model_providers(db, include_retired=True)
+    for provider in existing:
+        if provider.provider_id not in RETIRED_CHAT_PROVIDER_IDS:
+            continue
+        models = [m for m in provider.enabled_models or [] if m.get("type") in {"embedding", "rerank"}]
+        capabilities = set(provider.capabilities or []) & {"embedding", "rerank"}
+        capabilities.update(m["type"] for m in models)
+        provider.enabled_models = models
+        provider.capabilities = sorted(capabilities)
+        provider.models_endpoint = ""
+        if not capabilities:
+            provider.is_enabled = False
     existing_ids = {p.provider_id: p for p in existing}
 
     for provider_def in BUILTIN_PROVIDERS:
         provider_id = provider_def["provider_id"]
         existing_provider = existing_ids.get(provider_id)
         if existing_provider:
-            if not existing_provider.enabled_models and provider_def.get("enabled_models"):
-                existing_provider.enabled_models = _normalize_model_list(provider_def["enabled_models"])
-                existing_provider.capabilities = provider_def.get("capabilities") or existing_provider.capabilities
-                existing_provider.updated_by = "system"
-                await db.flush()
+            if not existing_provider.capabilities and provider_id in {"deepseek", "minimax-cn"}:
+                existing_provider.capabilities = ["chat"]
+            # 只迁移旧内置地址，保留管理员自定义代理端点。
+            if provider_id == "minimax-cn" and existing_provider.base_url == "https://api.minimaxi.com/v1":
+                existing_provider.base_url = provider_def["base_url"]
+                if existing_provider.models_endpoint == "https://api.minimaxi.com/v1/models":
+                    existing_provider.models_endpoint = ""
             continue
 
         payload = {key: value for key, value in provider_def.items() if value is not None}
@@ -317,7 +354,7 @@ async def ensure_builtin_model_providers_in_db(db: AsyncSession) -> None:
 async def create_provider_config(db: AsyncSession, data: dict[str, Any], username: str) -> ModelProvider:
     """创建独立模型供应商配置。"""
     payload = _normalize_payload(data)
-    if await get_model_provider(db, payload["provider_id"]):
+    if await get_model_provider(db, payload["provider_id"], include_retired=True):
         raise ValueError(f"供应商 {payload['provider_id']} 已存在")
     payload["created_by"] = username
     payload["updated_by"] = username
@@ -331,10 +368,11 @@ async def update_provider_config(
     username: str,
 ) -> ModelProvider | None:
     """更新独立模型供应商配置。"""
+    _validate_provider_id(provider_id)
     provider = await get_model_provider(db, provider_id)
     if provider is None:
         return None
-    payload = _normalize_payload(data, partial=True)
+    payload = _normalize_payload({**data, "provider_id": provider_id}, partial=True)
     # partial 更新时仅传 enabled_models，结合 DB 中现有 capabilities 校验
     if "enabled_models" in payload and "capabilities" not in payload:
         existing_caps = set(provider.capabilities or [])
@@ -369,7 +407,7 @@ async def _fetch_models_from_endpoint(
     if not endpoint:
         return []
 
-    response = await client.get(_models_url(provider.base_url, endpoint), headers=headers)
+    response = await client.get(get_docker_safe_url(_models_url(provider.base_url, endpoint)), headers=headers)
     response.raise_for_status()
     payload = response.json()
 

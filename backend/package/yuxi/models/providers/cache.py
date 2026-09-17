@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from yuxi.storage.redis import sync_redis_client
+from yuxi.models.providers.builtin import RETIRED_CHAT_PROVIDER_IDS, LOCAL_PROVIDER_IDS
 from yuxi.utils.logging_config import logger
 
 REDIS_CACHE_KEY = "yuxi:model_cache"
@@ -103,7 +104,11 @@ class ModelCache:
                 return {}
 
             items = json.loads(raw)
-            cache = {spec: ModelInfo.from_dict(data) for spec, data in items.items()}
+            cache = {
+                spec: ModelInfo.from_dict(data)
+                for spec, data in items.items()
+                if not (data["provider_id"] in RETIRED_CHAT_PROVIDER_IDS and data["model_type"] == "chat")
+            }
         except Exception as e:
             logger.warning(f"Failed to load model cache from Redis: {e}")
             return {}
@@ -148,6 +153,8 @@ class ModelCache:
 
             for model in provider.enabled_models or []:
                 model_type = model.get("type", "chat")
+                if provider.provider_id in RETIRED_CHAT_PROVIDER_IDS and model_type == "chat":
+                    continue
                 base_url = model.get("base_url_override") or self._get_base_url_for_type(provider, model_type)
 
                 info = ModelInfo(
@@ -184,6 +191,11 @@ class ModelCache:
             return provider.embedding_base_url
         if model_type == "rerank" and provider.rerank_base_url:
             return provider.rerank_base_url
+        if provider.provider_id in LOCAL_PROVIDER_IDS:
+            if model_type == "embedding":
+                return f"{provider.base_url.rstrip('/')}/embeddings"
+            if model_type == "rerank":
+                return f"{provider.base_url.rstrip('/')}/rerank"
         return provider.base_url
 
 

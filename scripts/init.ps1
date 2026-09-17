@@ -113,21 +113,6 @@ function Assert-SecuritySecrets {
     }
 }
 
-function Ensure-RequiredApiEnv {
-    if (Test-EnvValue "SILICONFLOW_API_KEY") {
-        return
-    }
-
-    Write-Host "SILICONFLOW_API_KEY is missing in .env." -ForegroundColor Yellow
-    do {
-        $SILICONFLOW_API_KEY = Read-Host "Please enter your SILICONFLOW_API_KEY"
-        if ([string]::IsNullOrEmpty($SILICONFLOW_API_KEY)) {
-            Write-Host "❌ API Key cannot be empty. Please try again." -ForegroundColor Red
-        }
-    } while ([string]::IsNullOrEmpty($SILICONFLOW_API_KEY))
-    Set-EnvValue "SILICONFLOW_API_KEY" $SILICONFLOW_API_KEY
-}
-
 function Ensure-JwtEnv {
     Ensure-SecuritySecret "JWT_SECRET_KEY"
     Ensure-SecuritySecret "API_KEY_DERIVATION_SECRET" @("JWT_SECRET_KEY")
@@ -172,7 +157,6 @@ Write-Host "==================================" -ForegroundColor Cyan
 # Check if .env file exists
 if (Test-Path ".env") {
     Write-Host "✅ .env file already exists. Checking required settings." -ForegroundColor Green
-    Ensure-RequiredApiEnv
     Ensure-JwtEnv
     Ensure-SandboxEnv
     Assert-SecuritySecrets
@@ -180,18 +164,7 @@ if (Test-Path ".env") {
     Write-Host "📝 .env file not found. Let's set up your environment variables." -ForegroundColor Yellow
     Write-Host ""
 
-    # Get SILICONFLOW_API_KEY
-    Write-Host "🔑 SiliconFlow API Key required" -ForegroundColor Yellow
-    Write-Host "Get your API key from: https://cloud.siliconflow.cn/i/Eo5yTHGJ" -ForegroundColor Blue
-    Write-Host "Note: Press Ctrl+C at any time to cancel" -ForegroundColor Gray
-    Write-Host ""
-
-    do {
-        $apiKey = Read-Host "Please enter your SILICONFLOW_API_KEY"
-        if ([string]::IsNullOrEmpty($apiKey)) {
-            Write-Host "❌ API Key cannot be empty. Please try again." -ForegroundColor Red
-        }
-    } while ([string]::IsNullOrEmpty($apiKey))
+    Write-Host "Configure DeepSeek, MiniMax or local models in the web UI after startup."
 
     # Get Web Search Provider and API Key (optional)
     Write-Host ""
@@ -233,8 +206,9 @@ if (Test-Path ".env") {
 
     # Create .env file
     $envContent = @"
-# SiliconFlow API Key (required)
-SILICONFLOW_API_KEY=$apiKey
+# Optional online model credentials
+DEEPSEEK_API_KEY=
+MINIMAX_API_KEY=
 
 # Web Search Provider settings
 "@

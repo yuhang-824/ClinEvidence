@@ -105,7 +105,7 @@ def make_model(monkeypatch, provider, field="reasoning_content", *, enabled=True
     return model, requests
 
 
-@pytest.mark.parametrize("provider", ["siliconflow-cn", "opencode-go", "zhipuai-coding-plan"])
+@pytest.mark.parametrize("provider", ["deepseek", "lmstudio", "vllm", "siliconflow-cn", "opencode-go", "zhipuai-coding-plan"])
 @pytest.mark.parametrize("field", ["reasoning_content", "reasoning"])
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("output_version", ["v0", "v1"])
@@ -182,7 +182,7 @@ async def test_disabling_adapter_reproduces_upstream_reasoning_loss(monkeypatch)
     assert not any(block["type"] == "reasoning" for block in result.content_blocks)
 
 
-@pytest.mark.parametrize("provider", ["siliconflow-cn", "opencode-go", "zhipuai-coding-plan"])
+@pytest.mark.parametrize("provider", ["deepseek", "lmstudio", "vllm", "siliconflow-cn", "opencode-go", "zhipuai-coding-plan"])
 async def test_missing_reasoning_still_completes_tool_roundtrip(monkeypatch, provider):
     """供应商没有输出推理时，不伪造字段、不妨碍工具及续答。"""
     model, _ = make_model(monkeypatch, provider, enabled=False)

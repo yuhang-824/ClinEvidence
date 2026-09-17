@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import {
   Globe,
+  Server,
   Plus,
   RefreshCw,
   Search,
@@ -41,10 +42,7 @@ const searchQuery = ref('')
 const modelTestLoadingBySpec = ref({})
 const modelTestResultBySpec = ref({})
 
-const PROVIDER_TYPE_OPTIONS = [
-  { value: 'openai', label: 'OpenAI Completions API' },
-  { value: 'anthropic', label: 'Anthropic Messages API' }
-]
+const PROVIDER_TYPE_OPTIONS = [{ value: 'openai', label: 'OpenAI 兼容接口' }]
 
 const MODALITY_DISPLAY = {
   text: { icon: TextInitial, label: '文本输入' },
@@ -60,6 +58,7 @@ const showProviderModal = ref(false)
 const editingProviderId = ref(null) // null = creating, string = editing
 const providerForm = reactive({
   provider_id: '',
+  chat_supported: true,
   display_name: '',
   provider_type: 'openai',
   default_protocol: 'openai_compatible',
@@ -67,7 +66,7 @@ const providerForm = reactive({
   embedding_base_url: '',
   rerank_base_url: '',
   models_endpoint: '/models',
-  embedding_models_endpoint: '/embeddings/models',
+  embedding_models_endpoint: '',
   rerank_models_endpoint: '',
   api_key_env: '',
   api_key: '',
@@ -128,8 +127,19 @@ const filteredProviders = computed(() => {
   })
 })
 
-const enabledProviders = computed(() => filteredProviders.value.filter((p) => p.is_enabled))
-const disabledProviders = computed(() => filteredProviders.value.filter((p) => !p.is_enabled))
+const providerGroups = computed(() => [
+  {
+    key: 'chat',
+    label: '对话与本地服务',
+    providers: filteredProviders.value.filter((p) => p.capabilities?.includes('chat'))
+  },
+  {
+    key: 'retrieval',
+    label: 'Embedding 与重排服务（保留线上配置）',
+    providers: filteredProviders.value.filter((p) => !p.capabilities?.includes('chat'))
+  }
+])
+const isLocalProvider = (provider) => ['lmstudio', 'vllm'].includes(provider?.provider_id)
 
 const providerStats = computed(() => {
   let enabled = 0,
@@ -149,6 +159,7 @@ const providerStats = computed(() => {
 const getProviderAvatar = (provider) => {
   const providerId = provider?.provider_id?.toLowerCase()
   const providerType = provider?.provider_type?.toLowerCase()
+  if (isLocalProvider(provider)) return modelAvatars.default
   return modelAvatars[providerId] || modelAvatars[providerType] || modelAvatars.default
 }
 
@@ -320,6 +331,7 @@ const openCreateProviderModal = () => {
   editingProviderId.value = null
   Object.assign(providerForm, {
     provider_id: '',
+    chat_supported: true,
     display_name: '',
     provider_type: 'openai',
     default_protocol: '',
@@ -327,7 +339,7 @@ const openCreateProviderModal = () => {
     embedding_base_url: '',
     rerank_base_url: '',
     models_endpoint: '/models',
-    embedding_models_endpoint: '/embeddings/models',
+    embedding_models_endpoint: '',
     rerank_models_endpoint: '',
     api_key_env: '',
     api_key: '',
@@ -343,6 +355,7 @@ const openEditProviderModal = (provider) => {
   editingProviderId.value = provider.provider_id
   Object.assign(providerForm, {
     provider_id: provider.provider_id,
+    chat_supported: provider.chat_supported ?? true,
     display_name: provider.display_name,
     provider_type: provider.provider_type || 'openai',
     default_protocol: '',
@@ -720,7 +733,7 @@ defineExpose({
       <template #actions>
         <a-button type="primary" class="lucide-icon-btn" @click="openCreateProviderModal">
           <Plus :size="14" />
-          新增供应商
+          添加模型服务
         </a-button>
         <a-button class="lucide-icon-btn" @click="loadProviders" :loading="loading">
           <RefreshCw :size="14" :class="{ spinning: loading }" />
@@ -728,25 +741,30 @@ defineExpose({
       </template>
     </PageShoulder>
 
-    <div
-      v-if="!loading && enabledProviders.length === 0 && disabledProviders.length === 0"
-      class="provider-empty-state"
-    >
+    <div v-if="!loading && filteredProviders.length === 0" class="provider-empty-state">
       <a-empty
         :image="false"
         :description="searchQuery ? '无匹配供应商' : '暂无供应商，点击上方按钮新增'"
       />
     </div>
 
-    <template v-else>
-      <div v-if="enabledProviders.length" class="provider-section-header">
-        已启用（{{ enabledProviders.length }}）
+    <a-alert
+      type="info"
+      show-icon
+      message="线上对话：DeepSeek、MiniMax 国内；本地推理：LM Studio、vLLM；向量与重排保留线上配置。"
+      description="配置服务并启用模型后，到基本设置选择默认模型。向量模型需单独配置；服务返回的通用模型列表请核对类型，必要时手动添加。"
+    />
+    <template v-for="group in providerGroups" :key="group.key">
+      <div v-if="group.providers.length" class="provider-section-header">
+        {{ group.label }}（{{ group.providers.length }}）
       </div>
-      <ExtensionCardGrid v-if="enabledProviders.length" :min-width="320">
+      <ExtensionCardGrid v-if="group.providers.length" :min-width="320">
         <InfoCard
-          v-for="provider in enabledProviders"
+          v-for="provider in group.providers"
           :key="provider.provider_id"
           :title="provider.display_name"
+          :variant="provider.is_enabled ? 'default' : 'mini'"
+          :description="provider.is_enabled ? undefined : provider.provider_id"
           :subtitle="provider.provider_id"
           :default-icon="Globe"
           :info="getProviderInfo(provider)"
@@ -764,10 +782,11 @@ defineExpose({
                 '--provider-avatar-filter': getProviderAvatar(provider).filter
               }"
             >
-              <img :src="getProviderAvatar(provider).icon" alt="" />
+              <Server v-if="isLocalProvider(provider)" :size="28" />
+              <img v-else :src="getProviderAvatar(provider).icon" alt="" />
             </span>
           </template>
-          <template #footer>
+          <template v-if="provider.is_enabled" #footer>
             <button class="view-models-btn" type="button" @click.stop="openModelsModal(provider)">
               <Settings2 :size="14" />
               管理模型
@@ -778,41 +797,12 @@ defineExpose({
           </template>
         </InfoCard>
       </ExtensionCardGrid>
-
-      <div v-if="disabledProviders.length" class="provider-section-header">
-        未启用（{{ disabledProviders.length }}）
-      </div>
-      <ExtensionCardGrid v-if="disabledProviders.length" :min-width="320">
-        <InfoCard
-          v-for="provider in disabledProviders"
-          :key="provider.provider_id"
-          variant="mini"
-          :title="provider.display_name"
-          :description="provider.provider_id"
-          @click="openEditProviderModal(provider)"
-        >
-          <template #icon>
-            <span
-              class="provider-avatar"
-              role="img"
-              :aria-label="`${provider.display_name} 图标`"
-              :style="{
-                background: getProviderAvatar(provider).background,
-                '--provider-avatar-scale': getProviderAvatar(provider).scale,
-                '--provider-avatar-filter': getProviderAvatar(provider).filter
-              }"
-            >
-              <img :src="getProviderAvatar(provider).icon" alt="" />
-            </span>
-          </template>
-        </InfoCard>
-      </ExtensionCardGrid>
     </template>
 
     <!-- Provider Edit Modal -->
     <a-modal
       v-model:open="showProviderModal"
-      :title="editingProviderId ? '编辑供应商' : '新增供应商'"
+      :title="editingProviderId ? '编辑供应商' : '添加模型服务'"
       :width="560"
       :confirm-loading="saving"
     >
@@ -848,6 +838,18 @@ defineExpose({
         </div>
       </template>
       <div class="modal-form" autocomplete="off">
+        <a-alert
+          v-if="['lmstudio', 'vllm'].includes(providerForm.provider_id)"
+          type="info"
+          show-icon
+          message="先在本地启动模型服务，再填写后端可访问的地址。未开启鉴权时 API Key 可留空。"
+          description="LM Studio 默认端口 1234，vLLM 默认端口 8000。Docker 中的 localhost 指向宿主机；WSL 内 Docker 连接 Windows 服务时请填写 Windows 主机 IP。"
+        />
+        <a-alert
+          v-if="providerForm.provider_id === 'minimax-cn'"
+          type="info"
+          message="MiniMax 使用国内 API Key；请在管理模型中手动添加账户支持的模型 ID，例如 MiniMax-M2.5。"
+        />
         <div class="form-row">
           <label class="form-label">
             <span>Provider ID</span>
@@ -873,7 +875,7 @@ defineExpose({
             <span>Base URL</span>
             <a-input
               v-model:value="providerForm.base_url"
-              placeholder="https://api.example.com/v1"
+              placeholder="http://localhost:8000/v1"
               autocomplete="off"
             />
           </label>
@@ -901,17 +903,7 @@ defineExpose({
             />
           </label>
           <label class="form-label">
-            <span class="api-key-label">
-              API Key
-              <a
-                v-if="providerForm.provider_id === 'fluxionai'"
-                href="https://fluxionai.space/register?source=github&campaign=yuxi&promo=YUXI"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                注册送 $7 API 额度
-              </a>
-            </span>
+            <span class="api-key-label"> API Key </span>
             <a-input-password
               v-model:value="providerForm.api_key"
               autocomplete="new-password"
@@ -935,14 +927,14 @@ defineExpose({
               <span>Embedding Base URL</span>
               <a-input
                 v-model:value="providerForm.embedding_base_url"
-                placeholder="https://api.example.com/v1/embeddings"
+                placeholder="本地预设留空时使用 Base URL + /embeddings"
               />
             </label>
             <label class="form-label">
               <span>Embedding Endpoint</span>
               <a-input
                 v-model:value="providerForm.embedding_models_endpoint"
-                placeholder="/embeddings/models"
+                placeholder="可留空；服务未区分类型时请手动添加向量模型"
               />
             </label>
           </div>
@@ -954,7 +946,7 @@ defineExpose({
               <span>Rerank Base URL</span>
               <a-input
                 v-model:value="providerForm.rerank_base_url"
-                placeholder="https://api.example.com/v1/rerank"
+                placeholder="vLLM 留空时使用 Base URL + /rerank"
               />
             </label>
             <label class="form-label">
@@ -970,7 +962,7 @@ defineExpose({
         <label class="form-label full-width">
           <span>能力</span>
           <a-select v-model:value="providerForm.capabilities" mode="multiple">
-            <a-select-option value="chat">chat</a-select-option>
+            <a-select-option v-if="providerForm.chat_supported" value="chat">chat</a-select-option>
             <a-select-option value="embedding">embedding</a-select-option>
             <a-select-option value="rerank">rerank</a-select-option>
           </a-select>
@@ -1026,7 +1018,7 @@ defineExpose({
                 :loading="remoteLoading"
                 @click="fetchRemoteModels(currentProviderForModels.provider_id)"
               >
-                获取远程模型
+                获取服务模型
               </a-button>
               <a-button
                 size="small"

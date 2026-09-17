@@ -88,6 +88,22 @@ async def test_single_agent_runtime_and_retired_api(tmp_path):
         try:
             token = await request("POST", "/api/auth/token", data={"username": uid, "password": password})
             client.headers["Authorization"] = "Bearer " + token["access_token"]
+            providers = (await request("GET", "/api/system/model-providers"))["data"]
+            for provider in providers:
+                if provider["provider_id"] in {"fluxionai", "openai", "siliconflow", "openrouter"}:
+                    assert "chat" not in provider["capabilities"]
+                    assert all(m["type"] != "chat" for m in provider["enabled_models"])
+            retrieval = next(p for p in providers if p["provider_id"] == "siliconflow-cn")
+            assert "chat" not in retrieval["capabilities"]
+            assert all(m["type"] != "chat" for m in retrieval["enabled_models"])
+            old_provider = await client.get("/api/system/model-providers/openai")
+            if any(p["provider_id"] == "openai" for p in providers):
+                assert old_provider.status_code == 200
+                assert "chat" not in old_provider.json()["data"]["capabilities"]
+            else:
+                assert old_provider.status_code == 404
+            forbidden = await client.put("/api/system/model-providers/siliconflow-cn", json={"capabilities": ["chat"]})
+            assert forbidden.status_code == 400
             backends = await request("GET", "/api/agent/backends")
             assert {item["backend_id"] for item in backends["backends"]} == {"ChatbotAgent"}
             assert (await client.get("/api/agent/backends/SubAgentBackend")).status_code == 404

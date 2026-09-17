@@ -216,6 +216,7 @@ async def test_fetch_remote_models_loads_embedding_only_when_capability_enabled(
     monkeypatch.setattr("yuxi.models.providers.service._fetch_models_from_endpoint", fake_fetch)
 
     class Provider:
+        provider_id = "test-local"
         base_url = "https://example.com/v1"
         api_key = None
         api_key_env = None

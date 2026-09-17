@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.utils.auth_middleware import get_admin_user, get_db, get_required_user
+from yuxi.models.providers.builtin import RETIRED_CHAT_PROVIDER_IDS
 from yuxi.models.providers.service import (
     check_credential_status,
     create_provider_config,
@@ -70,6 +71,7 @@ async def list_providers(
     for p in providers:
         d = p.to_dict()
         d["credential_status"] = check_credential_status(p)
+        d["chat_supported"] = p.provider_id not in RETIRED_CHAT_PROVIDER_IDS
         data.append(d)
     return {"success": True, "data": data}
 

@@ -38,13 +38,13 @@ def test_model_cache_prefers_model_base_url_override(monkeypatch):
 
     class Provider:
         is_enabled = True
-        provider_id = "alibaba-cn"
+        provider_id = "vllm"
         api_key = "sk-test"
         api_key_env = None
         provider_type = "openai"
-        base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        embedding_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
-        rerank_base_url = "https://dashscope.aliyuncs.com/compatible-api/v1/reranks"
+        base_url = "http://localhost:8000/v1"
+        embedding_base_url = "http://localhost:8000/v1/embeddings"
+        rerank_base_url = "http://localhost:8000/v1/rerank"
         headers_json = {}
         extra_json = {}
         enabled_models = [
@@ -61,7 +61,7 @@ def test_model_cache_prefers_model_base_url_override(monkeypatch):
 
     cache.rebuild([Provider()])
 
-    assert saved_cache["alibaba-cn:qwen3-rerank"].base_url == "https://invalid.example/rerank"
+    assert saved_cache["vllm:qwen3-rerank"].base_url == "https://invalid.example/rerank"
 
 
 def test_model_cache_loads_from_redis_and_uses_local_ttl(monkeypatch: pytest.MonkeyPatch):

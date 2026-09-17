@@ -46,7 +46,7 @@ ClinEvidence 交付本地文档知识能力路径；`external_kb` 是供 Agent/C
 - `storage/redis` 管理同步/异步 Redis 客户端和 ARQ 连接参数；业务 key、事件格式和缓存语义留在各自服务中。
 - `storage/minio` 管理对象上传、下载和临时文件访问。
 - `knowledge` 是知识库、文档解析和评估领域。`runtime.py` 暴露运行时知识库管理器；`preview.py` 拥有 Knowledge metadata、MinIO 原始对象读取和 MinIO Office PDF 缓存；`implementations` 放本地文档 Milvus 实现；`parser` 统一封装 OCR/文档解析；`chunking` 管理分块策略。
-- `models` 封装 chat、embedding 和 rerank 模型适配；`models/providers` 使用 PostgreSQL 保存模型供应商，并通过 Redis 缓存向 API 和 worker 提供一致视图。
+- `models` 封装 chat、embedding 和 rerank 模型适配；`models/providers` 使用 PostgreSQL 保存模型供应商，并通过 Redis 缓存向 API 和 worker 提供一致视图。ClinEvidence 的内置线上聊天限 DeepSeek / MiniMax 国内；LM Studio / vLLM 提供本地接入，SiliconFlow / DashScope 保留向量及重排配置。
 - `config` 区分系统级配置和用户级配置。PostgreSQL 持久化系统配置和用户配置；Redis 只保存带版本失效的短缓存，旧 `base.toml` 只作为一次性迁移来源。
 - `utils` 只放跨领域且足够通用的日志、时间、SSE 和轻量工具；`filepreview.py` 提供不依赖存储、领域或 HTTP 的格式识别、文本渲染和 Office 转换原语。
 

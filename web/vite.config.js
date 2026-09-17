@@ -14,21 +14,23 @@ const modelMetadataPlugin = {
   load(id) {
     if (id !== '\0virtual:model-display-metadata') return
     const catalog = Object.fromEntries(
-      Object.entries(providers).map(([providerId, provider]) => [
-        providerId,
-        {
-          models: Object.fromEntries(
-            Object.entries(provider.models).map(([modelId, model]) => [
-              modelId,
-              {
-                modalities: { input: model.modalities?.input },
-                limit: { context: model.limit?.context },
-                cost: model.cost
-              }
-            ])
-          )
-        }
-      ])
+      Object.entries(providers)
+        .filter(([id]) => ['deepseek', 'minimax-cn'].includes(id))
+        .map(([providerId, provider]) => [
+          providerId,
+          {
+            models: Object.fromEntries(
+              Object.entries(provider.models).map(([modelId, model]) => [
+                modelId,
+                {
+                  modalities: { input: model.modalities?.input },
+                  limit: { context: model.limit?.context },
+                  cost: model.cost
+                }
+              ])
+            )
+          }
+        ])
     )
     return `export const providers = ${JSON.stringify(catalog)}`
   }

@@ -11,9 +11,9 @@ from yuxi.storage.postgres.models_business import Base
 
 
 @pytest.mark.parametrize("key", ["default_model", "fast_model"])
-def test_system_chat_model_defaults_to_deepseek_flash(key):
-    """未配置的对话与快速模型使用硅基流动 DeepSeek Flash。"""
-    assert options.system_options.resolve({})[key] == "siliconflow-cn:deepseek-ai/DeepSeek-V4-Flash"
+def test_system_chat_model_starts_unconfigured(key):
+    """未配置的对话与快速模型等待管理员明确选择。"""
+    assert options.system_options.resolve({})[key] == ""
 
 
 @pytest.mark.parametrize("key", ["default_model", "fast_model"])

@@ -91,6 +91,9 @@ def load_chat_model(fully_specified_name: str | None, *, session_id: str | None 
         stream_usage=True,
         preserve_reasoning=info.provider_id
         in {
+            "deepseek",
+            "lmstudio",
+            "vllm",
             "siliconflow",
             "siliconflow-cn",
             "opencode",

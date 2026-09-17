@@ -1,13 +1,13 @@
 # 配置模型
 
-Yuxi 在“智能体 → 模型供应商”中统一管理聊天、嵌入和重排模型。只有管理员可以新增或修改供应商；普通用户可以在有权限的地方选择已经启用的模型。
+ClinEvidence 在“智能体 → 模型供应商”中统一管理聊天、嵌入和重排模型。只有管理员可以新增或修改供应商；普通用户可以在有权限的地方选择已经启用的模型。
 
 ## 配置顺序
 
 1. 打开“智能体 → 模型供应商”。
-2. 新增供应商，或打开一个内置供应商。
+2. 添加模型服务，或打开一个内置服务。
 3. 填写 API 地址和凭证，选择供应商能力。
-4. 在供应商的“模型配置”中获取远程模型，或手动添加模型。
+4. 在供应商的“模型配置”中获取服务模型，或手动添加模型。
 5. 对模型执行连接测试，再把它选为智能体或知识库使用的模型。
 
 供应商停用后，其模型不会进入运行时模型缓存。Web 管理页面会在系统默认模型仍引用某个供应商或模型时阻止删除或停用，先切换默认模型再修改；直接调用管理 API 时也应先检查并替换默认引用，不能依赖页面保护。
@@ -27,45 +27,39 @@ Yuxi 在“智能体 → 模型供应商”中统一管理聊天、嵌入和重�
 docker compose up -d --force-recreate api worker
 ```
 
-## 内置供应商
+## 模型服务范围
 
-系统启动时会同步内置供应商模板。模板提供供应商 ID、API 地址、凭证变量名和模型发现地址；是否可用取决于凭证、供应商状态和已启用模型。页面列出的内容是当前实例的实际配置，完整模板由 [`builtin.py`](https://github.com/xerrors/Yuxi/blob/main/backend/package/yuxi/models/providers/builtin.py) 维护。
+ClinEvidence 的线上聊天入口为 DeepSeek 与 MiniMax 国内。LM Studio 和 vLLM 连接本地已启动的推理服务。SiliconFlow（国内及国际）、DashScope 和 OpenRouter 保留各自原有的线上 Embedding / 重排能力；所有供应商已有的密钥、向量模型和知识库引用保持不变。管理员可添加额外模型服务，用于独立部署的向量或重排端点。
 
-内置供应商模板的完整映射如下。表中类型是模板预置或当前常见用途；模型仍需在供应商中启用，实际可用性以当前实例配置和供应商接口为准。
+聊天模型没有默认凭据或自动可用状态。先配置供应商、启用模型并测试连接，再到“设置 → 基本设置”选择默认对话与快速响应模型。旧线上聊天供应商停用后，其显式 Agent 模型引用需要重新选择；系统不会替用户切换至另一家云服务。
 
-| 展示名称 | Provider ID | 常见类型 | 凭证环境变量 |
-| --- | --- | --- | --- |
-| OpenAI | `openai` | chat | `OPENAI_API_KEY` |
-| DeepSeek | `deepseek` | chat | `DEEPSEEK_API_KEY` |
-| DashScope（中国站） | `alibaba-cn` | chat、embedding、rerank | `DASHSCOPE_API_KEY` |
-| DashScope（国际站） | `alibaba` | chat | `DASHSCOPE_API_KEY` |
-| Aliyun Coding Plan（中国站） | `alibaba-coding-plan-cn` | chat | `DASHSCOPE_API_KEY` |
-| Aliyun Coding Plan（国际站） | `alibaba-coding-plan` | chat | `DASHSCOPE_API_KEY` |
-| Zhipu（BigModel） | `zhipuai` | chat | `ZHIPUAI_API_KEY` |
-| Zhipu Coding Plan（BigModel） | `zhipuai-coding-plan` | chat | `ZHIPUAI_API_KEY` |
-| Zhipu（Z.AI） | `zai` | chat | `ZAI_API_KEY` |
-| Zhipu Coding Plan（Z.AI） | `zai-coding-plan` | chat | `ZAI_API_KEY` |
-| XiaomiMiMo Token Plan | `xiaomi-token-plan-cn` | chat | `XIAOMI_MIMO_TOKEN_PLAN_API_KEY` |
-| XiaomiMiMo | `xiaomi` | chat | `XIAOMI_MIMO_API_KEY` |
-| Kimi Code | `kimi-for-coding` | chat | `KIMI_CODE_API_KEY` |
-| Moonshot（中国站） | `moonshotai-cn` | chat | `MOONSHOT_API_KEY` |
-| Moonshot（国际站） | `moonshotai` | chat | `MOONSHOT_API_KEY` |
-| MiniMax（中国站） | `minimax-cn` | chat | `MINIMAX_API_KEY` |
-| MiniMax（国际站） | `minimax` | chat | `MINIMAX_API_KEY` |
-| OpenRouter | `openrouter` | chat、embedding | `OPENROUTER_API_KEY` |
-| ModelScope | `modelscope` | chat | `MODELSCOPE_ACCESS_TOKEN` |
-| OpenCode | `opencode` | chat | 无默认环境变量 |
-| OpenCode Go | `opencode-go` | chat | 无默认环境变量 |
-| SiliconFlow（中国站） | `siliconflow-cn` | chat、embedding、rerank | `SILICONFLOW_API_KEY` |
-| SiliconFlow（国际站） | `siliconflow` | chat、embedding、rerank | `SILICONFLOW_GLOBAL_API_KEY` |
+### LM Studio
 
-其中 `alibaba-cn`、`openrouter`、`siliconflow-cn` 和 `siliconflow` 的模板明确包含嵌入或重排能力；其他供应商是否能添加某类模型，取决于当前供应商配置的能力和接口。不要把 `alibaba` 和 `alibaba-cn` 混用：前者是 DashScope 国际站模板，后者带有内置的嵌入和重排配置。
+在 LM Studio 中加载模型并启动 Local Server。Base URL 通常为 `http://localhost:1234/v1`。在 ClinEvidence 的 LM Studio 卡片保存地址并启用，再进入“管理模型”获取服务模型。通用模型列表未标明用途时，请核对模型类型，向量模型可手动添加，填写实际维度后执行连接测试。
+
+LM Studio 未开启鉴权时 API Key 可留空；开启鉴权时填写服务生成的 Token。连接的是本地服务，ClinEvidence 不负责下载或加载权重。聊天和向量协议见 [LM Studio 官方文档](https://lmstudio.ai/docs/developer/openai-compat)。
+
+### vLLM
+
+先在推理服务器启动 vLLM 并加载所需模型，然后在 vLLM 卡片填写后端可访问的 OpenAI 兼容 Base URL，例如 `http://inference-host:8000/v1`。模型 ID 使用服务端实际暴露的名称；聊天、向量和重排模型通常需要各自的服务实例。工具调用还取决于所选模型、聊天模板和服务端工具解析配置。
+
+本地预设的向量地址留空时使用 Base URL 加 `/embeddings`，vLLM 重排地址留空时使用 Base URL 加 `/rerank`。独立部署时填写完整地址，或在单个模型中指定独立的完整请求 URL。不要为未部署的能力填写一个虚构模型。接口协议见 [vLLM 官方文档](https://docs.vllm.ai/en/v0.8.3/serving/openai_compatible_server.html)。
+
+### 容器到本地服务的地址
+
+API 和 worker 必须都能访问模型服务。Docker 部署会将 `http://localhost` / `http://127.0.0.1` 转换到 Docker 宿主机。当 Docker 运行在 WSL、模型运行在 Windows 时，填写可从 WSL 访问的 Windows 主机 IP；Windows 模型服务需监听可访问的网卡。WSL 地址变化后需要更新配置。模型发现与实际调用使用相同地址转换。
+
+### 线上向量与重排
+
+线上 Embedding / 重排和本地配置可以同时存在，通过基本设置和知识库配置选择。更换已有知识库的 Embedding 模型时，创建使用新模型的知识库并重新导入文档，不复用旧向量索引；仅维度相同也不代表模型兼容。重排模型不拥有持久向量，可以独立配置。
+
+MiniMax 国内使用 [OpenAI 兼容接口](https://platform.minimax.cn/docs/api-reference/text-openai-api)，在管理模型中手动填写账户支持的 ID，例如 `MiniMax-M2.5`。DeepSeek 可以通过服务模型列表发现可用模型。两者均需要对应平台凭据，其他供应商密钥不能通用。
 
 ## 添加和启用模型
 
 ### 从远程列表添加
 
-打开供应商的模型配置，点击“获取远程模型”，从返回列表中选择模型。远程列表只用于发现候选项，不会自动启用模型；确认添加后，模型才会进入运行时。
+打开供应商的模型配置，点击“获取服务模型”，从返回列表中选择模型。远程列表只用于发现候选项，不会自动启用模型；确认添加后，模型才会进入运行时。
 
 ### 手动添加
 

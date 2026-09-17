@@ -4,13 +4,18 @@ import { providers } from '@opencode-ai/models/snapshot'
 import { createServer } from 'vite'
 import { resolveModelDisplayMetadata } from '../../src/utils/modelMetadata.js'
 
-test('构建投影保留完整模型覆盖与显示结果，并缩减序列化体积', async () => {
-  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: 'custom' })
+test('构建投影只包含两家线上聊天供应商，并保留其显示结果', async () => {
+  const server = await createServer({
+    server: { middlewareMode: true, hmr: false },
+    appType: 'custom'
+  })
   try {
     const { loadModelMetadataCatalog } = await server.ssrLoadModule('/src/utils/modelMetadata.js')
     const { providers: compact } = await loadModelMetadataCatalog()
-    assert.deepEqual(Object.keys(compact), Object.keys(providers))
-    for (const [providerId, provider] of Object.entries(providers)) {
+    assert.deepEqual(Object.keys(compact).sort(), ['deepseek', 'minimax-cn'])
+    for (const [providerId, provider] of Object.entries(providers).filter(([id]) =>
+      ['deepseek', 'minimax-cn'].includes(id)
+    )) {
       assert.deepEqual(Object.keys(compact[providerId].models), Object.keys(provider.models))
       for (const id of Object.keys(provider.models)) {
         assert.deepEqual(
