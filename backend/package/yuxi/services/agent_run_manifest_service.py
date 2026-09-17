@@ -137,10 +137,12 @@ async def prepare_run_execution(
     worker_id: str,
 ) -> PreparedRunExecution:
     """准备唯一执行 Context，并从实际配置派生持久化摘要。"""
+    if run.run_type not in {"chat", "resume"}:
+        raise ValueError("仅支持单 Agent 运行")
     agent_item = await AgentRepository(db).get_visible_by_slug(
         slug=run.agent_slug,
         user=user,
-        kind="subagent" if run.run_type == "subagent" else "main",
+        kind="main",
     )
     if agent_item is None:
         raise ValueError("智能体不存在或无权限访问")
@@ -169,11 +171,6 @@ async def prepare_run_execution(
         context.model = payload["model_spec"]
     if payload.get("tool_approval_mode"):
         context.tool_approval_mode = payload["tool_approval_mode"]
-    if run.run_type == "subagent":
-        parent_thread_id = str((payload.get("runtime") or {}).get("parent_thread_id") or "").strip()
-        if not parent_thread_id:
-            raise ValueError("子智能体运行缺少必需的 parent_thread_id")
-        context.update({"parent_thread_id": parent_thread_id, "is_subagent_runtime": True})
     context = await prepare_agent_runtime_context(context)
     if not getattr(context, "_runtime_prepared", False):
         raise ValueError("执行用户不存在，无法准备 Context")

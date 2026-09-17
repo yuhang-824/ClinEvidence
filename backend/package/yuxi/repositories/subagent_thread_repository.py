@@ -41,26 +41,3 @@ class SubagentThreadRepository:
             )
         )
         return result.scalar_one_or_none()
-
-    async def create(
-        self,
-        *,
-        uid: str,
-        parent_conversation_id: int,
-        child_conversation_id: int,
-        child_thread_id: str,
-        subagent_slug: str,
-        created_by_run_id: str,
-    ) -> SubagentThread:
-        """创建一条父对话到子对话的线程关系记录。"""
-        item = SubagentThread(
-            uid=str(uid),
-            parent_conversation_id=parent_conversation_id,
-            child_conversation_id=child_conversation_id,
-            child_thread_id=child_thread_id,
-            subagent_slug=subagent_slug,
-            created_by_run_id=created_by_run_id,
-        )
-        self.db.add(item)
-        await self.db.flush()
-        return item

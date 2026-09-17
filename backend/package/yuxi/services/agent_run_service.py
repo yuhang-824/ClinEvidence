@@ -5,7 +5,7 @@ persisting the input message, creating the run row, enqueueing worker execution,
 streaming run events, loading final results and requesting cancellation.
 
 Keep source-specific orchestration outside this file. Normal chat, external
-invocation and subagent tools may all create AgentRun records, but each caller
+invocation may create AgentRun records, but each caller
 should translate its own request shape into this module's public run APIs first.
 The worker then executes every run through the same queue and ``chat_service``
 runtime path, so this module must not depend on agent-call, evaluation or
@@ -643,12 +643,14 @@ async def prepare_agent_run_creation_scope(
     current_uid: str,
     db: AsyncSession,
     request_id: str,
-    run_type: Literal["chat", "resume", "subagent"],
-    agent_kind: Literal["main", "subagent"],
+    run_type: Literal["chat", "resume"],
+    agent_kind: Literal["main"],
     created_by_run_id: str | None = None,
     subagent_thread_relation_id: int | None = None,
 ) -> AgentRunCreationScope:
     """校验 run 创建作用域，加载对话、智能体、后端和幂等状态，并拒绝同线程并发写入。"""
+    if run_type not in {"chat", "resume"} or agent_kind != "main":
+        raise HTTPException(status_code=422, detail="仅支持单 Agent 运行")
     if not conversation_thread_id:
         raise HTTPException(status_code=422, detail="conversation_thread_id 不能为空")
 

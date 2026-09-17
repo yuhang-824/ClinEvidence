@@ -2,15 +2,13 @@ export const DEFAULT_ALL_AGENT_RESOURCE_KINDS = Object.freeze([
   'tools',
   'knowledges',
   'mcps',
-  'skills',
-  'subagents'
+  'skills'
 ])
 
 export const MENTION_AGENT_RESOURCE_KINDS = Object.freeze([
   'knowledges',
   'mcps',
-  'skills',
-  'subagents'
+  'skills'
 ])
 
 /** 统一智能体身份字段，按 agent_id、slug、id 顺序选择规范 ID。 */
@@ -69,11 +67,11 @@ export const mergeVisibleAgentResourceSelection = (current, available, selected)
   return [...retained, ...selected.filter((value) => !retainedKeys.has(String(value)))]
 }
 
-/** 按各资源的空值契约投影可见选择，子智能体空列表表示使用全部。 */
+/** 按各资源的空值契约投影可见选择。 */
 export const getVisibleAgentResourceSelection = (current, kind, available) => {
   if (
     isDefaultAllAgentResourceKind(kind) &&
-    (current === null || (kind === 'subagents' && Array.isArray(current) && current.length === 0))
+    current === null
   ) {
     return [...available]
   }

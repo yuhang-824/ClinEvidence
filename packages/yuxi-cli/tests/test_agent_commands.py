@@ -186,9 +186,8 @@ def test_agent_show_renders_key_and_remaining_configuration(tmp_path):
     assert "deep-research" in output
     assert "web_search, read_file" in output
     mcp_line = next(line for line in output.splitlines() if "MCP servers" in line)
-    subagents_line = next(line for line in output.splitlines() if "Subagents" in line)
+    assert "Subagents" not in output
     assert "无" in mcp_line
-    assert "默认（全部可用）" in subagents_line
     assert "先核验证据。\n再给结论。" in output
     assert '"max_execution_steps": 100' in output
     assert FakeAgentClient.calls == [("get_agent", ("research-agent",))]

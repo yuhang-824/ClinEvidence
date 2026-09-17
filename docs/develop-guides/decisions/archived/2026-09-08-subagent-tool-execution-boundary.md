@@ -1,8 +1,10 @@
 # 子智能体禁用工具的执行边界
 
-状态：implemented
+状态：archived
 类型：bug-fix
-Owner：backend/package/yuxi/agents/buildin/subagent/graph.py
+Owner：docs/develop-guides/decisions/implemented/2026-09-17-clinevidence-single-agent.md
+
+当前边界由[单 Agent 范围](../implemented/2026-09-17-clinevidence-single-agent.md)拥有。本记录仅保留退役子 Agent 的历史执行策略。
 
 ## 问题
 

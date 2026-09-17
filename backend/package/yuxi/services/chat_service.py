@@ -17,7 +17,7 @@ import json
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import aclosing
-from typing import Any, Literal
+from typing import Any
 
 from langchain.messages import AIMessage, AIMessageChunk, HumanMessage
 from langgraph.types import Command
@@ -45,7 +45,7 @@ from yuxi.services.langfuse_service import (
 )
 from yuxi.services.model_message_audit_service import ModelMessageAuditCollector
 from yuxi.services.run_queue_service import publish_cancel_signals
-from yuxi.services.subagent_run_service import serialize_subagent_run_state
+from yuxi.services.subagent_history_service import serialize_subagent_run_state
 from yuxi.services.tool_message_audit_service import ToolMessageAuditCollector
 from yuxi.services.workdir_service import resolve_conversation_workdir_path
 from yuxi.storage.postgres.manager import pg_manager
@@ -252,14 +252,6 @@ def _metadata_namespace(metadata: dict | None) -> list[str]:
     return []
 
 
-def _validate_subagent_attachment_root(*, root_conversation, conversation, uid: str) -> None:
-    """确保 SubAgent 只读取同一 Project 根 Conversation 的附件。"""
-    if (
-        root_conversation is None
-        or root_conversation.uid != uid
-        or root_conversation.project_id != conversation.project_id
-    ):
-        raise ValueError("子智能体根 Conversation 的 Project Workdir 不可用")
 
 
 def _stream_message_key(metadata: dict | None, namespace: list[str], thread_id: str | None) -> tuple[str, str]:
@@ -957,7 +949,6 @@ async def _resolve_agent_runtime(
     requested_agent_slug: str | None,
     thread_id: str,
     prepared_execution: PreparedRunExecution,
-    agent_kind: Literal["main", "subagent"] = "main",
 ) -> tuple[Agent, Any, BaseContext, Conversation]:
     """校验执行时的线程与 Agent 权限，使用 worker 已固化的配置。"""
     conversation = await ConversationRepository(db).get_conversation_by_thread_id(thread_id)
@@ -968,7 +959,7 @@ async def _resolve_agent_runtime(
         raise ValueError("已有线程已绑定智能体，不能切换")
     await resolve_conversation_workdir_path(conversation=conversation, uid=str(user.uid), db=db)
 
-    agent_item = await AgentRepository(db).get_visible_by_slug(slug=conversation.agent_id, user=user, kind=agent_kind)
+    agent_item = await AgentRepository(db).get_visible_by_slug(slug=conversation.agent_id, user=user, kind="main")
     if not agent_item:
         raise ValueError("智能体不存在或无权限访问")
 
@@ -1031,7 +1022,6 @@ async def stream_agent_chat(
     meta = dict(meta or {})
     if not thread_id or not meta.get("request_id"):
         raise ValueError("执行需要已持久化的 thread_id 和 request_id")
-    uid = str(current_user.uid)
 
     query = input_message.content
     image_content = input_message.image_content
@@ -1044,7 +1034,6 @@ async def stream_agent_chat(
             user=current_user,
             requested_agent_slug=agent_slug,
             thread_id=thread_id,
-            agent_kind="subagent" if meta.get("run_type") == "subagent" else "main",
             prepared_execution=prepared_execution,
         )
     except ValueError as e:
@@ -1068,7 +1057,6 @@ async def stream_agent_chat(
 
     try:
         conv_repo = ConversationRepository(db)
-        runtime_scope_id = context.runtime_scope_id
         langfuse_run = _build_langfuse_run_context(
             current_user=current_user,
             thread_id=thread_id,
@@ -1082,13 +1070,6 @@ async def stream_agent_chat(
         await _persist_agent_run_langfuse_trace(db=db, meta=meta, run_context=langfuse_run)
 
         attachment_conversation = conversation
-        if meta.get("run_type") == "subagent":
-            attachment_conversation = await conv_repo.get_conversation_by_thread_id(runtime_scope_id)
-            _validate_subagent_attachment_root(
-                root_conversation=attachment_conversation,
-                conversation=conversation,
-                uid=uid,
-            )
         thread_attachment_records = await conv_repo.get_attachments(attachment_conversation.id)
         request_attachment_records = [
             attachment for attachment in thread_attachment_records if attachment.get("request_id") == meta["request_id"]
@@ -1620,6 +1601,6 @@ async def get_agent_state_view(
             response["messages"] = _serialize_state_messages(values)
         return response
 
-    # 子智能体线程在创建时必然同时写入子对话与线程关系（见 SubagentRunService.start），
+    # 子智能体线程在创建时必然同时写入子对话与线程关系（历史写入约束），
     # 由上面的 conversation 分支统一处理；走到这里说明该 thread 没有对应对话，即线程不存在。
     raise HTTPException(status_code=404, detail="对话线程不存在")

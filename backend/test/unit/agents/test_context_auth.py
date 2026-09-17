@@ -37,9 +37,7 @@ filter_config_by_role = context_module.filter_config_by_role
 normalize_agent_context_config = context_module.normalize_agent_context_config
 
 
-@dataclass(kw_only=True)
-class ChatBotContext(BaseContext):
-    subagents: list[str] | None = field(default=None, metadata={"kind": "subagents"})
+from yuxi.agents.buildin.chatbot.context import ChatBotContext
 
 
 @dataclass
@@ -256,7 +254,7 @@ async def test_normalize_agent_context_config_expands_null_and_filters_explicit_
     assert normalized["mcps"] == ["mcp-a"]
     assert normalized["skills"] == []
     assert normalized["preload_skills"] == []
-    assert normalized["subagents"] == ["research-agent"]
+    assert "subagents" not in normalized
     assert normalized["summary_threshold"] == 10
     assert normalized["summary_keep_messages"] == 8
     assert normalized["summary_prompt"] == "custom summary"
@@ -271,7 +269,7 @@ async def test_normalize_agent_context_config_expands_null_and_filters_explicit_
         context_schema=ChatBotContext,
     )
 
-    assert empty_subagents_normalized["subagents"] == ["research-agent", "critique-agent"]
+    assert "subagents" not in empty_subagents_normalized
 
     preloaded_normalized = await normalize_agent_context_config(
         {
@@ -434,7 +432,6 @@ async def test_prepare_agent_runtime_context_filters_resources_and_derives_runti
         mcps=None,
         skills=["skill-a", "missing"],
         preload_skills=["skill-a", "missing"],
-        subagents=[],
     )
 
     prepared = await context_module.prepare_agent_runtime_context(context)
@@ -444,7 +441,7 @@ async def test_prepare_agent_runtime_context_filters_resources_and_derives_runti
     assert prepared.mcps == ["mcp-a"]
     assert prepared.skills == ["skill-a"]
     assert prepared.preload_skills == ["skill-a"]
-    assert prepared.subagents == ["research-agent"]
+    assert not hasattr(prepared, "subagents")
     assert prepared._visible_knowledge_bases == [{"slug": "kb-a", "name": "Docs A"}]
     assert prepared._skill_runtime_snapshot.get("effective_skills", []) == ["skill-a", "skill-b"]
     assert prepared._skill_runtime_snapshot.get("runtime_skills", {})["skill-a"]["name"] == "Skill A"
@@ -519,7 +516,6 @@ async def test_prepare_agent_runtime_context_clears_resources_for_missing_user(m
         mcps=["mcp"],
         skills=["skill"],
         preload_skills=["skill"],
-        subagents=["agent"],
     )
 
     prepared = await context_module.prepare_agent_runtime_context(context)
@@ -529,7 +525,7 @@ async def test_prepare_agent_runtime_context_clears_resources_for_missing_user(m
     assert prepared.mcps == []
     assert prepared.skills == []
     assert prepared.preload_skills == []
-    assert prepared.subagents == []
+    assert not hasattr(prepared, "subagents")
     assert prepared._visible_knowledge_bases == []
     assert prepared._skill_runtime_snapshot.get("effective_skills", []) == []
     assert prepared._skill_runtime_snapshot.get("runtime_skills", {}) == {}
@@ -551,7 +547,7 @@ def test_persistent_config_cannot_replace_runtime_identity():
 async def test_normalized_persistent_config_drops_subagent_runtime_flags():
     """状态查询与主动压缩的配置归一化不接受运行标记。"""
     from yuxi.agents.context import normalize_agent_context_config
-    from yuxi.agents.buildin.subagent.context import SubAgentContext
+    from yuxi.agents.buildin.chatbot.context import ChatBotContext
 
     normalized = await normalize_agent_context_config(
         {
@@ -564,7 +560,7 @@ async def test_normalized_persistent_config_drops_subagent_runtime_flags():
         },
         db=None,
         user=None,
-        context_schema=SubAgentContext,
+        context_schema=ChatBotContext,
     )
     assert "parent_thread_id" not in normalized
     assert "is_subagent_runtime" not in normalized

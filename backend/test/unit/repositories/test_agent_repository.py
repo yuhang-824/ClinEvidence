@@ -9,10 +9,6 @@ from yuxi.repositories.agent_repository import (
     AgentRepository,
     DEFAULT_AGENT_DESCRIPTION,
     DEFAULT_SHARE_CONFIG,
-    GENERAL_PURPOSE_AGENT_DESCRIPTION,
-    GENERAL_PURPOSE_AGENT_NAME,
-    GENERAL_PURPOSE_AGENT_SLUG,
-    SUB_AGENT_BACKEND_ID,
     merge_agent_config_json,
     user_can_access_agent,
     user_can_manage_agent,
@@ -198,49 +194,8 @@ async def test_ensure_default_agent_backfills_missing_description(monkeypatch):
     db.refresh.assert_awaited_once_with(agent)
 
 
-@pytest.mark.asyncio
-async def test_ensure_general_purpose_subagent_creates_empty_config_subagent(monkeypatch):
-    db = FakeDb()
-    repo = AgentRepository(db)
-
-    async def get_by_slug(_slug):
-        return None
-
-    monkeypatch.setattr(repo, "get_by_slug", get_by_slug)
-
-    agent = await repo.ensure_general_purpose_subagent(created_by="system")
-
-    assert agent.slug == GENERAL_PURPOSE_AGENT_SLUG
-    assert agent.name == GENERAL_PURPOSE_AGENT_NAME
-    assert agent.description == GENERAL_PURPOSE_AGENT_DESCRIPTION
-    assert agent.backend_id == SUB_AGENT_BACKEND_ID
-    assert agent.is_subagent is True
-    assert agent.is_default is False
-    assert agent.config_json == {"context": {}}
-    assert agent.share_config == DEFAULT_SHARE_CONFIG
-    assert agent.created_by == "system"
-    assert db.added is agent
-    db.commit.assert_awaited_once()
-    db.refresh.assert_awaited_once_with(agent)
 
 
-@pytest.mark.asyncio
-async def test_ensure_general_purpose_subagent_is_idempotent(monkeypatch):
-    db = FakeDb()
-    repo = AgentRepository(db)
-    existing = SimpleNamespace(slug=GENERAL_PURPOSE_AGENT_SLUG, config_json={"context": {"model": "custom:model"}})
-
-    async def get_by_slug(_slug):
-        return existing
-
-    monkeypatch.setattr(repo, "get_by_slug", get_by_slug)
-
-    agent = await repo.ensure_general_purpose_subagent()
-
-    assert agent is existing
-    assert db.added is None
-    db.commit.assert_not_awaited()
-    db.refresh.assert_not_awaited()
 
 
 @pytest.mark.asyncio

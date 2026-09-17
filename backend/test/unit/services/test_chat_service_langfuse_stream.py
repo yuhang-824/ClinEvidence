@@ -441,18 +441,6 @@ async def test_trace_flush_yields_to_other_requests_and_is_awaited(
         assert await asyncio.to_thread(flush_finished.wait, 3)
 
 
-def test_subagent_attachment_root_rejects_same_path_from_different_project() -> None:
-    """共享目录路径不能替代 Project 执行树身份。"""
-
-    child = SimpleNamespace(uid="user-1", project_id="project-child", workdir_path="projects/shared")
-    root = SimpleNamespace(uid="user-1", project_id="project-root", workdir_path="projects/shared")
-
-    with pytest.raises(ValueError, match="Project Workdir"):
-        svc._validate_subagent_attachment_root(
-            root_conversation=root,
-            conversation=child,
-            uid="user-1",
-        )
 
 
 @pytest.mark.asyncio

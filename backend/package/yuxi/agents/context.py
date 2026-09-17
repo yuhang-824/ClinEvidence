@@ -395,8 +395,7 @@ class BaseContext:
 
 
 _DEFAULT_ALL_CONTEXT_FIELDS = frozenset({"tools", "knowledges", "mcps", "skills"})
-_EMPTY_ALL_CONTEXT_FIELDS = frozenset({"subagents"})
-AGENT_RUNTIME_RESOURCE_FIELDS = _DEFAULT_ALL_CONTEXT_FIELDS | _EMPTY_ALL_CONTEXT_FIELDS
+AGENT_RUNTIME_RESOURCE_FIELDS = _DEFAULT_ALL_CONTEXT_FIELDS
 
 
 def _normalize_selected_resource_keys(value: Any, available: list[str]) -> list[str]:
@@ -422,13 +421,10 @@ def _resource_fields_requiring_available_keys(normalized: dict, resource_fields:
     for field_name in resource_fields:
         current = normalized.get(field_name)
         if current is None:
-            if field_name in _DEFAULT_ALL_CONTEXT_FIELDS | _EMPTY_ALL_CONTEXT_FIELDS:
+            if field_name in _DEFAULT_ALL_CONTEXT_FIELDS:
                 fields_to_load.add(field_name)
             else:
                 normalized[field_name] = []
-        elif field_name in _EMPTY_ALL_CONTEXT_FIELDS and current == []:
-            normalized[field_name] = None
-            fields_to_load.add(field_name)
         elif isinstance(current, list) and current:
             fields_to_load.add(field_name)
         else:
@@ -489,14 +485,6 @@ async def resolve_agent_resource_options(
         options["skills"] = [
             _resource_option(skill.slug, skill.name, skill.description) for skill in skills if skill.slug
         ]
-    if "subagents" in fields_to_load:
-        from yuxi.repositories.agent_repository import AgentRepository
-
-        subagents = await AgentRepository(db).list_visible_subagents(user=user)
-        options["subagents"] = [
-            _resource_option(agent.slug, agent.name, agent.description) for agent in subagents if agent.slug
-        ]
-
     return options
 
 

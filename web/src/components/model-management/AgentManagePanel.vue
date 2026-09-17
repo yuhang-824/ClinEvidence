@@ -47,14 +47,7 @@ const filteredAgents = computed(() => {
   })
 })
 
-const groupedAgents = computed(() => {
-  const agents = filteredAgents.value.filter((agent) => !agent.is_subagent)
-  const subagents = filteredAgents.value.filter((agent) => agent.is_subagent)
-  return [
-    { key: 'agents', title: '智能体', agents },
-    { key: 'subagents', title: '子智能体', agents: subagents }
-  ].filter((group) => group.agents.length > 0)
-})
+const groupedAgents = computed(() => [{ key: 'agents', title: '智能体', agents: filteredAgents.value }])
 
 const agentStats = computed(() => ({
   total: managedAgents.value.length,
@@ -83,7 +76,7 @@ const loadAgentBackends = async () => {
 const loadAgents = async () => {
   agentLoading.value = true
   try {
-    const response = await agentApi.getAgents({ includeSubagents: true })
+    const response = await agentApi.getAgents()
     managedAgents.value = (response.agents || []).map(normalizeAgent)
   } catch (error) {
     message.error(error.message || '加载智能体失败')

@@ -83,9 +83,6 @@
 
                 <!-- 多选 / 工具列表 (统一处理) -->
                 <div v-else-if="isListConfig(key, value)" class="list-config-container">
-                  <div v-if="value.kind === 'subagents'" class="hidden-selection-note">
-                    未指定子智能体时，使用全部可访问的子智能体。
-                  </div>
                   <div
                     v-if="getHiddenSelection(key).length"
                     class="hidden-selection-note"
@@ -93,11 +90,7 @@
                   >
                     另有 {{ getHiddenSelection(key).length }} 项当前不可访问，修改可见选择时会保留。
                     <template v-if="!isReadOnlyConfig">
-                      {{
-                        value.kind === 'subagents'
-                          ? '使用全部会替换固定选择范围。'
-                          : '清空全部会移除这些选择。'
-                      }}
+                      清空全部会移除这些选择。
                     </template>
                   </div>
                   <!-- Case 1: <= 5 options, inline list -->
@@ -115,7 +108,7 @@
                           @click="clearSelection(key)"
                           v-if="canResetSelection(key)"
                         >
-                          {{ value.kind === 'subagents' ? '使用全部' : '清空全部' }}
+                          清空全部
                         </a-button>
                         <template v-if="isToolsKind(value.kind)">
                           <a-divider type="vertical" />
@@ -188,7 +181,7 @@
                           class="clear-btn"
                           @click="clearSelection(key)"
                         >
-                          {{ value.kind === 'subagents' ? '使用全部' : '清空全部' }}
+                          清空全部
                         </a-button>
                       </div>
 
@@ -531,9 +524,6 @@ const navigateToConfigPage = (kind) => {
       case 'skills':
         router.push({ path: '/extensions', query: { tab: 'skills' } })
         break
-      case 'subagents':
-        router.push({ path: '/agent-manage', query: { tab: 'agents' } })
-        break
     }
   }, 100)
 }
@@ -541,7 +531,7 @@ const navigateToConfigPage = (kind) => {
 const isListConfig = (key, value) => {
   const isDefaultAllKind = isDefaultAllAgentResourceKind(value?.kind)
   const isList = value?.type === 'list'
-  return isDefaultAllKind || isList || key === 'skills' || key === 'subagents'
+  return isDefaultAllKind || isList || key === 'skills'
 }
 
 const isDefaultEnabledResourceValue = (value) => value === null || value === undefined
@@ -774,11 +764,8 @@ const getHiddenSelection = (key) =>
     []
   )
 
-/** 子智能体仅在固定列表模式提供恢复全部的动作。 */
+/** 有选择时提供清空操作。 */
 const canResetSelection = (key) => {
-  if (configurableItems.value[key]?.kind === 'subagents') {
-    return Array.isArray(agentConfig.value[key]) && agentConfig.value[key].length > 0
-  }
   return getSelectedCount(key) > 0 || getHiddenSelection(key).length > 0
 }
 </script>

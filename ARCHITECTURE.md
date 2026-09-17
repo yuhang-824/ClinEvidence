@@ -6,7 +6,7 @@
 
 ## 鸟瞰
 
-ClinEvidence 基于 Yuxi 构建面向循证医助的本地文档知识库平台。用户通过 Vue 前端管理智能体、知识库、模型、工具、Skills、MCP 与 SubAgents；前端通过 `/api` 调用 FastAPI；后端服务层协调 PostgreSQL、Redis、MinIO、Milvus、LangGraph 和沙盒。
+ClinEvidence 基于 Yuxi 构建面向循证医助的本地文档知识库平台。用户通过 Vue 前端管理智能体、知识库、模型、工具、Skills 与 MCP；前端通过 `/api` 调用 FastAPI；后端服务层协调 PostgreSQL、Redis、MinIO、Milvus、LangGraph 和沙盒。
 
 普通智能体请求先在 PostgreSQL 中保存为请求和消息，再立即派发或进入线程级 FIFO 队列。派发后的 `AgentRun` 通过 Redis/ARQ 交给独立 worker 执行，运行事件写入 Redis Stream，最终状态和业务记录写回 PostgreSQL，前端通过 SSE 消费排队与运行事件。
 
@@ -38,9 +38,9 @@ ClinEvidence 交付本地文档知识能力路径；`external_kb` 是供 Agent/C
 
 ### `backend/package/yuxi`
 
-- `agents` 定义 LangGraph 智能体体系。`BaseAgent` 是智能体基类，`BaseContext` 是运行上下文；`buildin/chatbot` 和 `buildin/subagent` 放内置智能体；`middlewares` 组合文件系统、Skills、SubAgent、摘要、审批、模型兼容和用量统计；`toolkits` 管理本地工具；`backends` 对接沙盒、知识库和 Skills 文件系统；`skills` 与 `mcp` 管理扩展能力及其运行时加载。
+- `agents` 定义 LangGraph 智能体体系。`BaseAgent` 是智能体基类，`BaseContext` 是运行上下文；`buildin/chatbot` 放单 Agent 后端；`middlewares` 组合文件系统、Skills、摘要、审批、模型兼容和用量统计；`toolkits` 管理本地工具；`backends` 对接沙盒、知识库和 Skills 文件系统；`skills` 与 `mcp` 管理扩展能力及其运行时加载。
 - `workspace` 是持久化 UserWorkspace Owner。`paths.py` 拥有 uid、宿主根和数据库 `projects/<managed-name>` 映射，`filesystem.py` 拥有 no-follow 文件原语，`workdir.py` 提供以一个 Project 为根的持久化视图，`preview.py` 拥有 UserWorkspace 文件预览和 runtime 本地 Office 缓存。Agent Backend 单独拥有 `/home/gem/...` runtime 路径。
-- `services` 是用例层。智能体主链路重点分为请求接入与排队、Run 生命周期、运行时配置、worker 执行和 SubAgent 调用；聊天历史、附件、工作区、文件预览、评估、认证和观测等跨模块流程也从这里找入口。
+- `services` 是用例层。智能体主链路重点分为请求接入与排队、Run 生命周期、运行时配置、worker 执行；聊天历史、附件、工作区、文件预览、评估、认证和观测等跨模块流程也从这里找入口。
 - `repositories` 是 PostgreSQL 访问边界，封装业务对象、知识库元数据、AgentRun、请求队列、Task 和扩展配置查询。路由不应绕过 repository 直接拼装持久化逻辑。
 - `storage/postgres` 管理 SQLAlchemy 模型、业务连接池和 LangGraph checkpoint 连接池。
 - `storage/redis` 管理同步/异步 Redis 客户端和 ARQ 连接参数；业务 key、事件格式和缓存语义留在各自服务中。
@@ -74,6 +74,8 @@ ClinEvidence 交付本地文档知识能力路径；`external_kb` 是供 Agent/C
 
 `/` 是公开首页；登录后的核心工作区是 `/agent`。`/extensions` 对所有登录用户开放，其中 Skills 对普通用户可见，知识库、工具和 MCP 管理能力仅管理员可见；Dashboard 仅超级管理员可访问。后端权限检查始终是最终边界，前端守卫只负责页面体验。
 
+ClinEvidence 仅执行单 Agent 的 chat/resume，不注册子 Agent 后端或委派工具。旧子 Agent 定义不可执行，旧 pending 子运行由 worker 显式失败；历史线程、审计和终态清理结构保留。多个独立配置不构成 Agent 间委派。
+
 ## 智能体运行链路
 
 一次普通智能体请求经过以下边界：
@@ -84,10 +86,10 @@ ClinEvidence 交付本地文档知识能力路径；`external_kb` 是供 Agent/C
 4. 服务在同一数据库事务中创建用户消息和 AgentRunRequest，并按用户、智能体和线程检查活跃 Run 与 FIFO 队头。
 5. 请求可以立即派发、进入等待队列或按 `reject` 策略拒绝；只有数据库提交成功后才向 ARQ 投递 Run。
 6. `worker` 中的 `run_worker` 使用进程 identity 与 job-attempt token 取得 AgentRun lease；未取得 ownership 的重复任务不会执行。执行期间 heartbeat 在独立事务中续租，再加载智能体配置和运行上下文执行对应 LangGraph。Langfuse 启用时，当前 lease owner 在模型流开始前固化预创建 trace ID；Model 与 Tool lifecycle 只在 start/terminal 使用受 lease 保护的短事务，delta 期间不写 PostgreSQL。远端观测不拥有 Run 终态。
-7. 智能体通过 middleware 组合 UserWorkspace 中的当前 Workdir、只读共享 Skills、MCP、SubAgent、审批、摘要和工具能力。根 Agent 与子 Agent 共享同一个 runtime 和 Workdir；Sandbox 不在 Run 启动时预创建，只在首次 Sandbox-backed 文件或命令操作时按同一 runtime scope 惰性创建，失败在该操作处显式返回。知识库能力主要由内置 `knowledge-base` Skill 及其依赖工具按需开放。
+7. 智能体通过 middleware 组合 UserWorkspace 中的当前 Workdir、只读共享 Skills、MCP、审批、摘要和工具能力。每次执行使用当前 Conversation 的 runtime 和 Workdir；Sandbox 不在 Run 启动时预创建，只在首次 Sandbox-backed 文件或命令操作时按同一 runtime scope 惰性创建，失败在该操作处显式返回。知识库能力主要由内置 `knowledge-base` Skill 及其依赖工具按需开放。
 8. Run 事件写入 Redis Stream；取消先提交 PostgreSQL durable 状态，再通过 Redis key 轮询快速提示，PostgreSQL watcher 负责兜底，不使用 Pub/Sub。AgentRun、消息投递状态、阶段时间点、Model/Tool 审计和最终结果写入 PostgreSQL；阶段耗时从时间点统一派生，不把 Redis 事件或客户端观察值当作历史事实。运行中的 Model AIMessage 与 ToolMessage 分别使用 `model_audit`、`tool_audit` 类型，不进入普通历史、Memory、Dashboard 消息计数或最终输出；终态 State 按稳定 operation ID reconcile，Model 声明的 pending ToolCall 保留审批兼容，工具开始后的 effective input、输出、错误和状态只由 ToolMessage 单向覆盖，同 Run 的最后一条 AIMessage 由 `output_message_id` 转为可展示结果。调试面板通过权限受控的独立审计读接口读取 Model/Tool 最新有界时间线，并按 Message ID 或 `(run_id, role, operation_id)` 与 SSE 投影合并，不改变普通 History 契约。任何 assistant Message 写入前先在 Run 行锁内验证当前 attempt；正常输出、绑定和 `completed` 同事务提交。worker 失联后，过期 lease 会幂等收敛为带 `worker_lease_expired` 原因的 `failed`，残留 running Model 审计收敛为 `abandoned`。该失败只证明执行 ownership 已丢失，外部副作用仍需按 at-least-once 语义核对。
 9. 前端在排队阶段消费 Request SSE，派发后切换到 Run SSE，并根据数据库状态处理断线恢复和终态补偿。
-10. Conversation 保存不可变 `project_id`，每个 Project 一期绑定一个 `workdir_path`，多个 Project 可以共享同一路径。v0.7.1 Conversation 在一次性迁移中直接获得 implicit Project，不形成 Conversation 路径中间态。新 managed Project 使用服务端创建的 `projects/YYYY-MM-DD_HH-MM-SS_<project-id-prefix>[-N]`，既有 `projects/<uuid>` 继续有效；linked Project 可绑定当前 uid UserWorkspace 下除根目录外任意经过 no-follow 校验的已有目录。selectable Project 支持重命名；删除在同一事务中软删除 Project 与全部 Conversation，但不删除或修改 Workdir 字节。Workspace tree 仅展示 `/projects` 下属于 active selectable Project 的目录子树，隐藏 implicit、deleted 与尚未归属 Project 的匿名目录。`yuxi.workspace` 唯一拥有宿主路径和 fd-relative 文件访问，统一 Workdir resolver 通过 Project 为 Viewer、附件、Artifact、Run 和 SubAgent 提供同一持久路径。Agent Backend 单独把该路径映射为 `/home/gem/user-data/...` runtime 路径。目录的持久 POSIX 字节是 Agent 文件、附件、Viewer 和 artifact 的实时事实源，`uploads/outputs` 只是按需创建的目录约定。Run 终态清理 runtime 进程但保留 Workdir。
+10. Conversation 保存不可变 `project_id`，每个 Project 一期绑定一个 `workdir_path`，多个 Project 可以共享同一路径。v0.7.1 Conversation 在一次性迁移中直接获得 implicit Project，不形成 Conversation 路径中间态。新 managed Project 使用服务端创建的 `projects/YYYY-MM-DD_HH-MM-SS_<project-id-prefix>[-N]`，既有 `projects/<uuid>` 继续有效；linked Project 可绑定当前 uid UserWorkspace 下除根目录外任意经过 no-follow 校验的已有目录。selectable Project 支持重命名；删除在同一事务中软删除 Project 与全部 Conversation，但不删除或修改 Workdir 字节。Workspace tree 仅展示 `/projects` 下属于 active selectable Project 的目录子树，隐藏 implicit、deleted 与尚未归属 Project 的匿名目录。`yuxi.workspace` 唯一拥有宿主路径和 fd-relative 文件访问，统一 Workdir resolver 通过 Project 为 Viewer、附件、Artifact、Run 提供同一持久路径。Agent Backend 单独把该路径映射为 `/home/gem/user-data/...` runtime 路径。目录的持久 POSIX 字节是 Agent 文件、附件、Viewer 和 artifact 的实时事实源，`uploads/outputs` 只是按需创建的目录约定。Run 终态清理 runtime 进程但保留 Workdir。
 
 审批或人机输入产生的 resume 请求会从 LangGraph checkpoint 恢复，并创建新的 AgentRun；它不重新进入普通消息 FIFO 接入流程。
 
@@ -107,7 +109,7 @@ ClinEvidence 交付本地文档知识能力路径；`external_kb` 是供 Agent/C
 - 前端 API 调用集中在 `web/src/apis`，组件不要散落拼接普通 HTTP 接口。
 - 智能体能力通过 context、middleware、toolkits、Skills、MCP 和 backends 组合；不要把知识库、沙盒或扩展逻辑硬编码进单个页面或路由。
 - Skill 的依赖工具只有在对应 Skill 被显式预加载或动态激活后才对模型开放；基础工具与受 Skill 门控的工具保持边界。
-- Shipping 进程始终装配知识库、图谱和评估能力；解析器等只服务实际动作的重运行时继续保持惰性加载。
+- Shipping 进程始终装配本地文档知识库和评估能力；解析器等只服务实际动作的重运行时继续保持惰性加载。
 - 文件边界只使用三种跨层路径：数据库中的 Project `workdir_path`、Viewer 当前 scope 相对 `/foo`、Agent/artifact runtime 绝对 `/home/gem/user-data/...`；宿主 `Path` 由 `yuxi.workspace` 或显式 v0.7.1 storage migration 内部持有，普通 Service/Repository 不得取得。
 - 沙盒虚拟路径由当前 Project Workdir、User Data 与共享 Skills 根共同约束；个人 Skill 保存在 UserWorkspace 的 `agents/skills`，共享与内置 Skill 才投影到只读 `/home/gem/skills`。Sandbox 的惰性创建不得绕过 runtime scope、uid、Workdir 或 generation 校验，Run 终态仍清理 runtime 进程并保留 Workdir。用户可见路径、对象存储 URL 与宿主机真实路径不能混用。
 - 面向用户和外部系统的输入在边界校验；内部服务优先依赖已有类型、事务和仓储约束，避免用静默回退掩盖设计错误。

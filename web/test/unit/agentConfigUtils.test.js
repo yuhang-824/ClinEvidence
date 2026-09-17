@@ -60,10 +60,8 @@ test('编辑可见选择保留不可见引用，取消最后一个可见项不�
   assert.deepEqual(original, ['visible-a', 'hidden-a', 'visible-b', 'hidden-b'])
 })
 
-test('子智能体空列表显示全部，Skill 空列表显示禁用，隐藏引用不作为可见选项', () => {
+test('Skill 空列表显示禁用，隐藏引用不作为可见选项', () => {
   const available = ['a', 'b']
-  assert.deepEqual(getVisibleAgentResourceSelection([], 'subagents', available), available)
-  assert.deepEqual(getVisibleAgentResourceSelection(null, 'subagents', available), available)
   assert.deepEqual(getVisibleAgentResourceSelection([], 'skills', available), [])
   assert.deepEqual(getVisibleAgentResourceSelection(null, 'skills', available), available)
   assert.deepEqual(getVisibleAgentResourceSelection(['hidden', 'b'], 'skills', available), ['b'])

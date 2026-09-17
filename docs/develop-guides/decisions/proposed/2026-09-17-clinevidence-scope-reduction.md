@@ -6,7 +6,7 @@ Owner：docker-compose.yml
 
 ## 问题
 
-读者是 ClinEvidence 的开发者；本页是依赖取舍与分阶段删除提案。目标是围绕循证医助及配套病历质控整理可移除能力，降低运行资源与维护成本。前置知识是现有 API、worker、知识库和 Agent 分工。第一批精简已实施，事实与验证见[本地 PDF 范围决策](../implemented/2026-09-17-clinevidence-local-pdf-scope.md)；本提案继续拥有后续批次，医疗业务闭环尚未验证。
+读者是 ClinEvidence 的开发者；本页是依赖取舍与分阶段删除提案。目标是围绕循证医助及配套病历质控整理可移除能力，降低运行资源与维护成本。前置知识是现有 API、worker、知识库和 Agent 分工。第一批精简已实施，事实与验证见[本地 PDF 范围决策](../implemented/2026-09-17-clinevidence-local-pdf-scope.md)；单 Agent 部分见[已实施决策](../implemented/2026-09-17-clinevidence-single-agent.md)，本提案继续拥有其余后续批次，医疗业务闭环尚未验证。
 
 范围沿用单 Agent、患者资料、指南证据检索、带引用回答与规则质控。知识图谱、多 Agent 协作、开放联网研究、任意代码执行不属于目标功能。模型接入和离线解析方案尚未确定，因此不能以“暂时未用”为理由删除模型、OCR 或文档解析基础能力。
 
@@ -30,7 +30,7 @@ Owner：docker-compose.yml
 | 开放网页搜索与通用深度研究 | 第一批移除 | 搜索工具与预设、`langchain-tavily`；`tavily-python` 经锁文件确认后处理 | 离线指南检索继续可用；业务回答不能仍引用被删除工具 |
 | MySQL 报表技能 | 第一批移除 | `mysql-reporter` 技能及其 `pymysql` 依赖 | 保留 PostgreSQL 业务存储；同步处理内置技能安装与测试 |
 | Dify、Notion 等外部知识库接入 | 第一批收窄 | 外部类型入口、连接器、工厂注册与配置 | 保留本地知识库；先盘点是否有现存外部库记录，不能让历史记录变成不可解释的错误 |
-| 多 Agent 委派与通用 Agent 管理 | 第二批收窄 | 子 Agent 预设、委派工具、中间件、配置和页面 | 保留单 Agent 的 LangGraph/LangChain、Run/FIFO/取消机制；`deepagents` 仍有其他消费者 |
+| 多 Agent 委派与通用 Agent 管理 | 委派已移除，独立配置保留 | 子 Agent 预设、委派工具、中间件、配置和页面 | 保留单 Agent 的 LangGraph/LangChain、Run/FIFO/取消机制；`deepagents` 仍有其他消费者 |
 | 定时 Agent 任务 | 第二批移除 | 调度页面、接口、服务、worker 注册；候选依赖 `croniter` | 队列重试、lease/heartbeat 等运行维护任务必须保留 |
 | MCP 服务器管理 | 第二批移除 | 管理入口、启动初始化、工具发现、`langchain-mcp-adapters` | 医助工具用现有内部接口显式注册；`mcp` 是否仍为传递依赖以重新解析锁文件为准 |
 | 通用沙盒与代码执行 | 第三批替换后移除 | sandbox provisioner、运行沙盒、`agent-sandbox`；provisioner 独有 Docker/Kubernetes SDK | 先把必要的附件、证据访问和摘要卸载文件操作改为受权限控制的服务；严禁改成宿主机任意执行 |

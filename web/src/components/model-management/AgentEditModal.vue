@@ -31,7 +31,6 @@ const userStore = useUserStore()
 const agentStore = useAgentStore()
 
 const DEFAULT_AGENT_BACKEND_ID = 'ChatbotAgent'
-const SUB_AGENT_BACKEND_ID = 'SubAgentBackend'
 const runtimeAgentModalTabs = ['model', 'tools', 'other']
 
 const showAgentModal = ref(false)
@@ -157,7 +156,6 @@ const runtimeConfigSegment = computed(() =>
 )
 const isRuntimeAgentModalTab = (key) => runtimeAgentModalTabs.includes(key)
 const getDefaultBackendId = () => DEFAULT_AGENT_BACKEND_ID
-const isSubAgentBackend = (backendId) => backendId === SUB_AGENT_BACKEND_ID
 
 const getInitialShareConfig = () => ({
   version: 2,
@@ -277,21 +275,14 @@ const openEdit = async (agent) => {
         manage_scope: null
       }
     : detail.share_config || getInitialShareConfig()
-  await agentStore.selectAgent(detail.id, { allowSubagent: true })
+  await agentStore.selectAgent(detail.id)
   captureProfileBaseline()
   showAgentModal.value = true
-}
-
-const restoreChatAgentSelectionIfNeeded = async () => {
-  if (!agentStore.selectedAgent?.is_subagent) return
-  const fallbackAgentId = (agentStore.agents || []).find((agent) => !agent.is_subagent)?.id
-  if (fallbackAgentId) await agentStore.selectAgent(fallbackAgentId)
 }
 
 const closeAgentModal = async () => {
   if (saving.value || agentIconUploading.value) return
   showAgentModal.value = false
-  await restoreChatAgentSelectionIfNeeded()
 }
 
 const beforeAgentIconUpload = (file) => {
@@ -328,7 +319,6 @@ const buildAgentPayload = () => {
     description: agentForm.description.trim() || null,
     icon: agentForm.icon.trim() || null,
     share_config: normalizeShareConfigForPayload(),
-    is_subagent: isSubAgentBackend(agentForm.backend_id)
   }
 
   if (!editingAgentId.value) {
@@ -372,8 +362,7 @@ const saveAgent = async () => {
       message.success('智能体已创建')
     }
     showAgentModal.value = false
-    await restoreChatAgentSelectionIfNeeded()
-  } catch (error) {
+    } catch (error) {
     message.error(error.message || '保存智能体失败')
   } finally {
     saving.value = false

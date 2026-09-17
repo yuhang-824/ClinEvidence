@@ -73,7 +73,7 @@ RUN_CANCEL_POLL_SECONDS = 0.2
 RUN_DURABLE_CANCEL_POLL_SECONDS = 1.0
 RUN_LEASE_SECONDS = 120
 RUN_HEARTBEAT_SECONDS = 30
-SUPPORTED_RUN_TYPES = {"chat", "resume", "subagent"}
+SUPPORTED_RUN_TYPES = {"chat", "resume"}
 WORKER_ID = f"worker-{uuid.uuid4().hex}"
 _RECONCILIATION_TASK_KEY = "agent_run_reconciliation_task"
 _TASK_RECONCILIATION_TASK_KEY = "durable_task_reconciliation_task"
@@ -113,32 +113,6 @@ async def _validate_run_workdir_binding(run: AgentRun) -> AuthorizedWorkdir:
         if run.run_type in {"chat", "resume"} and persisted_scope != str(run.conversation_thread_id):
             raise NonRetryableRunError(f"{str(run.run_type).capitalize()} AgentRun 的 runtime scope 非法")
 
-        if run.run_type == "subagent":
-            creator_id = str(run.created_by_run_id or "").strip()
-            if not creator_id:
-                raise NonRetryableRunError("SubAgent Run 缺少创建者")
-            repo = AgentRunRepository(db)
-            execution_pair = await repo.get_subagent_run_with_creator(
-                uid=str(run.uid),
-                created_by_run_id=creator_id,
-                run_id=str(run.id),
-            )
-            if execution_pair is None:
-                raise NonRetryableRunError("SubAgent Run 的线程关系非法")
-            creator_run, _persisted_run = execution_pair
-            if creator_run.run_type not in {"chat", "resume"}:
-                raise NonRetryableRunError("SubAgent Run 的创建者非法")
-            creator_binding = await resolve_authorized_workdir(
-                thread_id=str(creator_run.conversation_thread_id),
-                uid=str(run.uid),
-                db=db,
-            )
-            if (
-                persisted_scope != str(creator_run.runtime_scope_id)
-                or int(creator_binding.conversation_id) != int(creator_run.conversation_id)
-                or creator_binding.project_id != binding.project_id
-            ):
-                raise NonRetryableRunError("SubAgent Run 的 runtime scope 不属于创建者执行树")
     return binding
 
 
@@ -1042,8 +1016,6 @@ async def process_agent_run(ctx, run_id: str):
             "workdir_relative_path": context.workdir_relative_path,
             "workdir_path": context.workdir_path,
         }
-        if run_type == "subagent":
-            meta["parent_thread_id"] = context.parent_thread_id
         if input_metadata.get("source"):
             meta["source"] = input_metadata.get("source")
         if isinstance(input_metadata.get("agent_invocation_meta"), dict):
@@ -1056,7 +1028,6 @@ async def process_agent_run(ctx, run_id: str):
             "source": input_metadata.get("source"),
             "run_type": run_type,
             "created_by_run_id": run.created_by_run_id,
-            "subagent_slug": agent_slug if run_type == "subagent" else None,
         }
         if isinstance(input_metadata.get("agent_invocation_meta"), dict):
             metadata_event["agent_invocation_meta"] = input_metadata.get("agent_invocation_meta") or {}
@@ -1091,7 +1062,7 @@ async def process_agent_run(ctx, run_id: str):
                     on_prepared=record_prepared,
                     model_request_recorder=model_request_recorder,
                 )
-            elif run_type in {"chat", "subagent"}:
+            elif run_type == "chat":
                 stream = stream_agent_chat(
                     agent_slug=agent_slug,
                     thread_id=thread_id,

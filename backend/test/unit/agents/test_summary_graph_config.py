@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 from yuxi.agents.buildin.chatbot import graph as chatbot_graph
-from yuxi.agents.buildin.subagent import graph as subagent_graph
 from yuxi.agents.middlewares import summary as summary_module
 
 
@@ -43,7 +42,6 @@ def _patch_common_graph_deps(monkeypatch: pytest.MonkeyPatch, graph_module, capt
     ("graph_module", "threshold", "build_args", "patch_subagent_task"),
     [
         (chatbot_graph, 123, (object(),), True),
-        (subagent_graph, 64, (object(), "default"), False),
     ],
 )
 @pytest.mark.unit
@@ -53,12 +51,6 @@ async def test_graph_uses_shared_summary_middleware_factory(
 ) -> None:
     captured: dict = {}
     _patch_common_graph_deps(monkeypatch, graph_module, captured)
-
-    async def no_subagent_middleware(_context):
-        return None
-
-    if patch_subagent_task:
-        monkeypatch.setattr(graph_module, "create_subagent_task_middleware", no_subagent_middleware)
 
     middlewares = await graph_module._build_middlewares(_context(summary_threshold=threshold), *build_args)
 
@@ -103,7 +95,6 @@ def test_shared_summary_factory_uses_one_threshold(monkeypatch: pytest.MonkeyPat
     "graph_module,agent_class",
     [
         (chatbot_graph, chatbot_graph.ChatbotAgent),
-        (subagent_graph, subagent_graph.SubAgentBackend),
     ],
 )
 @pytest.mark.asyncio
@@ -131,7 +122,7 @@ async def test_graph_passes_conversation_session_to_model(monkeypatch, graph_mod
     assert graph["model"] == {"spec": context.model, "session_id": context.thread_id}
 
 
-@pytest.mark.parametrize("agent_class", [chatbot_graph.ChatbotAgent, subagent_graph.SubAgentBackend])
+@pytest.mark.parametrize("agent_class", [chatbot_graph.ChatbotAgent])
 @pytest.mark.asyncio
 async def test_graph_rejects_unprepared_context(agent_class):
     """未经权限资源准备的对象不能构建执行图。"""

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from yuxi.agents.buildin import agent_manager
 from yuxi.agents.context import filter_declared_config
@@ -45,26 +45,26 @@ agent_router = APIRouter(prefix="/agent", tags=["agent"])
 
 
 class AgentCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: str
-    backend_id: str = "ChatbotAgent"
+    backend_id: Literal["ChatbotAgent"] = "ChatbotAgent"
     slug: str | None = None
     description: str | None = None
     icon: str | None = None
     pics: list[str] | None = None
     config_json: dict | None = None
     share_config: dict | None = None
-    is_subagent: bool | None = None
     set_default: bool = False
 
 
 class AgentUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: str | None = None
     description: str | None = None
     icon: str | None = None
     pics: list[str] | None = None
     config_json: dict | None = None
     share_config: dict | None = None
-    is_subagent: bool | None = None
 
 
 class AgentRunCreate(BaseModel):
@@ -134,13 +134,12 @@ async def get_agent_backend(
 
 @agent_router.get("")
 async def list_agents(
-    include_subagents: bool = Query(False),
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
     repo = AgentRepository(db)
     await repo.ensure_default_agent()
-    items = await repo.list_visible(user=current_user, include_subagent_definitions=include_subagents)
+    items = await repo.list_visible(user=current_user)
     backend_info_cache: dict[tuple[str, bool, str], dict] = {}
     agents = [await _serialize_agent(repo, item, current_user, backend_info_cache=backend_info_cache) for item in items]
     return {"agents": agents}
@@ -184,7 +183,6 @@ async def create_agent(
             config_resource_access=config_resource_access,
             share_config=payload.share_config,
             is_default=payload.set_default,
-            is_subagent=payload.is_subagent,
             created_by=str(current_user.uid),
             creator=current_user,
         )
@@ -245,7 +243,6 @@ async def update_agent(
             config_json=config_json,
             config_resource_access=config_resource_access,
             share_config=payload.share_config,
-            is_subagent=payload.is_subagent,
             updated_by=str(current_user.uid),
             updater=current_user,
         )

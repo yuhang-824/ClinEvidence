@@ -11,8 +11,7 @@ import {
 const createResourceMap = (createValue) => ({
   knowledges: createValue(),
   mcps: createValue(),
-  skills: createValue(),
-  subagents: createValue()
+  skills: createValue()
 })
 
 const getMentionResourceKind = (key, kind) => {
@@ -31,15 +30,6 @@ const normalizeMentionResource = (option, kind) => {
   if (kind === 'knowledges') {
     return {
       kb_id: value,
-      name,
-      description
-    }
-  }
-
-  if (kind === 'subagents') {
-    return {
-      id: value,
-      slug: typeof option === 'object' && option !== null ? option.slug || value : value,
       name,
       description
     }
@@ -147,7 +137,8 @@ export function useAgentMentionConfig({
     const knowledgeBases = selectOptions('knowledges')
     const mcps = selectOptions('mcps')
     const skills = selectOptions('skills')
-    const subagents = selectOptions('subagents')
+    // 仅供历史子运行展示兼容，不提供新委派资源。
+    const subagents = []
 
     return {
       files,

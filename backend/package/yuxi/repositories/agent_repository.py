@@ -25,14 +25,8 @@ DEFAULT_SHARE_CONFIG = {
     "manage_scope": None,
 }
 
-GENERAL_PURPOSE_AGENT_SLUG = "general-purpose"
-GENERAL_PURPOSE_AGENT_NAME = "通用任务"
-GENERAL_PURPOSE_AGENT_DESCRIPTION = (
-    "面向没有专用角色约束的一般任务，使用默认运行配置独立完成分析、整理、写作或文件处理。"
-)
-
 ADMIN_ROLES = {"admin", "superadmin"}
-RETIRED_AGENT_SLUGS = {"web-search", "deep-research", "research-explorer", "fact-verifier"}
+RETIRED_AGENT_SLUGS = {"web-search", "deep-research", "research-explorer", "fact-verifier", "general-purpose"}
 AGENT_RESOURCE_CONFIG_FIELDS = AGENT_RUNTIME_RESOURCE_FIELDS | {"preload_skills"}
 
 
@@ -41,10 +35,10 @@ def is_builtin_agent(agent: Agent) -> bool:
 
 
 def resolve_agent_is_subagent(backend_id: str, is_subagent: bool | None = None) -> bool:
-    expected = backend_id == SUB_AGENT_BACKEND_ID
-    if is_subagent is not None and bool(is_subagent) != expected:
-        raise ValueError("SubAgentBackend 与 is_subagent 必须保持一致")
-    return expected
+    """拒绝退役的子 Agent 定义，数据库标记仅用于历史读取。"""
+    if backend_id == SUB_AGENT_BACKEND_ID or is_subagent:
+        raise ValueError("ClinEvidence 仅支持单 Agent，子 Agent 已移除")
+    return False
 
 
 def get_allowed_agent_access_levels(user: User) -> list[str]:
@@ -67,7 +61,11 @@ def normalize_agent_share_config(
 
 
 def user_can_access_agent(user: User, agent: Agent) -> bool:
-    if agent.slug in RETIRED_AGENT_SLUGS:
+    if (
+        agent.slug in RETIRED_AGENT_SLUGS
+        or getattr(agent, "is_subagent", False)
+        or getattr(agent, "backend_id", None) == SUB_AGENT_BACKEND_ID
+    ):
         return False
     return resolve_agent_permission(user, agent) != ResourcePermission.NONE
 
@@ -130,71 +128,11 @@ class AgentRepository:
         await self.db.refresh(agent)
         return agent
 
-    async def ensure_general_purpose_subagent(self, *, created_by: str | None = None) -> Agent:
-        return await self._ensure_builtin_agent(
-            slug=GENERAL_PURPOSE_AGENT_SLUG,
-            backend_id=SUB_AGENT_BACKEND_ID,
-            name=GENERAL_PURPOSE_AGENT_NAME,
-            description=GENERAL_PURPOSE_AGENT_DESCRIPTION,
-            config_context={},
-            is_subagent=True,
-            created_by=created_by,
-        )
-
-    async def _ensure_builtin_agent(
-        self,
-        *,
-        slug: str,
-        backend_id: str,
-        name: str,
-        description: str,
-        config_context: dict,
-        is_subagent: bool,
-        created_by: str | None = None,
-    ) -> Agent:
-        """落库一个内置 Agent；已存在则原样返回，避免覆盖管理员后续修改。"""
-        agent = await self.get_by_slug(slug)
-        if agent:
-            return agent
-
-        agent = Agent(
-            slug=slug,
-            backend_id=backend_id,
-            name=name,
-            description=description,
-            icon=None,
-            pics=[],
-            config_json={"context": config_context},
-            share_config=DEFAULT_SHARE_CONFIG.copy(),
-            is_default=False,
-            is_subagent=is_subagent,
-            created_by=created_by,
-            updated_by=created_by,
-            created_at=utc_now_naive(),
-            updated_at=utc_now_naive(),
-        )
-        self.db.add(agent)
-        await self.db.commit()
-        await self.db.refresh(agent)
-        return agent
-
-    async def list_visible(self, *, user: User, include_subagent_definitions: bool = False) -> list[Agent]:
-        """列出用户可见的主智能体，只有显式请求时才包含子智能体定义。"""
+    async def list_visible(self, *, user: User) -> list[Agent]:
+        """列出用户可见的单 Agent 配置。"""
         stmt = select(Agent).where(Agent.slug.not_in(RETIRED_AGENT_SLUGS))
-        if not include_subagent_definitions:
-            stmt = stmt.where(Agent.is_subagent.is_(False))
+        stmt = stmt.where(Agent.is_subagent.is_(False), Agent.backend_id != SUB_AGENT_BACKEND_ID)
         result = await self.db.execute(stmt.order_by(Agent.is_default.desc(), Agent.id.asc()))
-        agents = list(result.scalars().all())
-        if user.role == "superadmin":
-            return agents
-        return [agent for agent in agents if user_can_access_agent(user, agent)]
-
-    async def list_visible_subagents(self, *, user: User) -> list[Agent]:
-        result = await self.db.execute(
-            select(Agent)
-            .where(Agent.is_subagent.is_(True), Agent.slug.not_in(RETIRED_AGENT_SLUGS))
-            .order_by(Agent.name.asc(), Agent.id.asc())
-        )
         agents = list(result.scalars().all())
         if user.role == "superadmin":
             return agents
@@ -203,19 +141,28 @@ class AgentRepository:
     async def get_by_slug(self, slug: str) -> Agent | None:
         if slug in RETIRED_AGENT_SLUGS:
             return None
-        result = await self.db.execute(select(Agent).where(Agent.slug == slug))
+        result = await self.db.execute(
+            select(Agent).where(
+                Agent.slug == slug, Agent.is_subagent.is_(False), Agent.backend_id != SUB_AGENT_BACKEND_ID
+            )
+        )
         return result.scalar_one_or_none()
 
     async def list_by_slugs(self, slugs: list[str]) -> list[Agent]:
         result = await self.db.execute(
-            select(Agent).where(Agent.slug.in_(slugs), Agent.slug.not_in(RETIRED_AGENT_SLUGS))
+            select(Agent).where(
+                Agent.slug.in_(slugs),
+                Agent.slug.not_in(RETIRED_AGENT_SLUGS),
+                Agent.is_subagent.is_(False),
+                Agent.backend_id != SUB_AGENT_BACKEND_ID,
+            )
         )
         return list(result.scalars().all())
 
     async def get_visible_by_slug(
-        self, *, slug: str, user: User, kind: Literal["main", "subagent", "any"] = "main"
+        self, *, slug: str, user: User, kind: Literal["main", "any"] = "main"
     ) -> Agent | None:
-        """按 slug 读取用户可见智能体，并按入口语义过滤主/子智能体。"""
+        """按 slug 读取用户可见且可执行的单 Agent 配置。"""
         agent = await self.get_by_slug(slug)
         if not agent:
             return None
@@ -225,8 +172,6 @@ class AgentRepository:
             return agent
         if kind == "main":
             return None if agent.is_subagent else agent
-        if kind == "subagent":
-            return agent if agent.is_subagent else None
         raise ValueError(f"未知智能体入口类型: {kind}")
 
     async def get_default(self) -> Agent | None:
@@ -284,8 +229,6 @@ class AgentRepository:
         creator: User | None = None,
     ) -> Agent:
         resolved_is_subagent = resolve_agent_is_subagent(backend_id, is_subagent)
-        if resolved_is_subagent and is_default:
-            raise ValueError("子智能体不能设为默认智能体")
         owner_uid = str(created_by or "")
         default_share_config = {
             "version": 2,

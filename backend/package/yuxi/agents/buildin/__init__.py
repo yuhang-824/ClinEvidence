@@ -21,6 +21,8 @@ class AgentManager(metaclass=SingletonMeta):
             self.get_agent(agent_id)
 
     def get_agent(self, agent_id, reload=False, reload_graph=False, **kwargs):
+        if agent_id not in self._classes:
+            return None
         # 检查是否已经创建了该 agent 的实例
         if reload or agent_id not in self._instances:
             agent_class = self._classes[agent_id]

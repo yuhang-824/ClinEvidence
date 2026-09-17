@@ -2,11 +2,13 @@
 
 状态：implemented
 类型：bug-fix
-Owner：backend/package/yuxi/services/subagent_run_service.py
+Owner：web/src/stores/projects.js
 
 ## 问题
 
 Project 删除与普通显式 Conversation 创建使用同一 Project 行锁，但运行中的父 Agent 可以经 SubAgent 服务在 deleted Project 下新增 Conversation 与 Run。聊天输入区创建 Project 后只更新组件局部列表，侧边栏不会同步；侧边栏“最近”视图还把 `updated_at` 当作主要时间，改变了原有按 `created_at` 排序的契约。
+
+子 Agent 写入部分由[单 Agent 范围](./2026-09-17-clinevidence-single-agent.md)取代；Project 共享 store 与排序规则继续有效。以下子 Agent 内容仅记录已退役入口的历史约束。
 
 ## 决策
 

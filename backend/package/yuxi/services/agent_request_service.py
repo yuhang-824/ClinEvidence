@@ -2,7 +2,7 @@
 
 Web Chat、Agent Call 和评估入口只在路由/适配层处理各自的输入输出协议，
 实际的 AgentRunRequest 入队、Conversation 绑定和提交后派发都从这里进入。
-Resume 与 Subagent 保留各自的特殊生命周期，不经过本服务。
+Resume 保留独立的恢复生命周期，不经过本服务。
 """
 
 from __future__ import annotations

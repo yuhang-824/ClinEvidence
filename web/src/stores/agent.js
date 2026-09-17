@@ -189,13 +189,13 @@ export const useAgentStore = defineStore(
       }
     }
 
-    async function selectAgent(agentId, { allowSubagent = false } = {}) {
+    async function selectAgent(agentId) {
       if (!agentId) return
       let knownAgent = agentDetails.value[agentId] || agents.value.find((a) => a.id === agentId)
       if (!knownAgent) {
         knownAgent = await fetchAgentDetail(agentId)
       }
-      if (knownAgent?.is_subagent && !allowSubagent) return
+      if (knownAgent?.is_subagent) return
       isLoadingConfig.value = true
       try {
         const detail = agentDetails.value[agentId] || (await fetchAgentDetail(agentId))

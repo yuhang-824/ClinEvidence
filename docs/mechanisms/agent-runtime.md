@@ -4,7 +4,7 @@
 
 ## 运行入口
 
-普通聊天、恢复审批和子智能体由各自接入服务保存 Conversation、输入 Message 与运行身份；普通消息先经过 Request 队列。worker 只执行已持久化的 Run：
+普通聊天和恢复审批由各自接入服务保存 Conversation、输入 Message 与运行身份；普通消息先经过 Request 队列。worker 只执行已持久化的 Run：
 
 ```mermaid
 flowchart LR
@@ -21,7 +21,7 @@ worker 在取得 lease 并校验输入后，合并 Agent 可配置字段、Run �
 
 执行流要求非空的 thread/request 身份，并检查 Conversation 存在、未删除、属于当前用户且绑定正确 Agent。缺失身份或线程时显式失败。线程创建和用户消息写入由接入服务负责；流中的 init 消息用于展示已经保存的输入。
 
-运行入口读取用户工作区的 `agents/AGENTS.md` 和 `agents/USER.md`，把非空内容追加到系统提示词；文件不存在或不可读不会阻断运行，每个文件最多读取 64 KiB。`prepare_agent_runtime_context` 按当前用户权限过滤工具、知识库、MCP、Skills 和子智能体，并展开 Skill 依赖。准备结果仅属于该 Context 对象，独立执行入口对新 Context 显式准备；`get_graph(context)` 创建模型、工具和中间件。LangGraph state 保存消息、待办、文件、产物和子智能体状态，checkpoint 只使用 PostgreSQL。
+运行入口读取用户工作区的 `agents/AGENTS.md` 和 `agents/USER.md`，把非空内容追加到系统提示词；文件不存在或不可读不会阻断运行，每个文件最多读取 64 KiB。`prepare_agent_runtime_context` 按当前用户权限过滤工具、知识库、MCP和 Skills，并展开 Skill 依赖。准备结果仅属于该 Context 对象，独立执行入口对新 Context 显式准备；`get_graph(context)` 创建模型、工具和中间件。LangGraph state 保存消息、待办、文件和产物，checkpoint 只使用 PostgreSQL。
 
 API/worker 不信任浏览器内存中的完整配置。请求可以提供受限的单次覆盖值，例如模型或工具审批模式；配置快照也不能替代实时授权。
 
@@ -42,23 +42,22 @@ API/worker 不信任浏览器内存中的完整配置。请求可以提供受限
 
 `_visible_knowledge_bases` 与 `_skill_runtime_snapshot` 中的授权 Skill、依赖和预加载内容在 Context 准备时派生；中间件在运行期间维护 token 等状态。身份与运行标记由 worker 注入，持久 Agent 配置通过 `update_config` 仅装载 configurable 字段。接入和执行使用同一装载规则。运行事件的模型、审批与 Workdir 元数据从准备后的 Context 投影。
 
-普通请求模型依次取显式请求值、会话保存值、Agent 配置和系统默认；接入时确定并保存在 Run 输入中。SubAgent 创建服务依次取子 Agent 模型配置、父 Run 输入中的模型和系统默认，middleware 只提交调用信息。
+普通请求模型依次取显式请求值、会话保存值、Agent 配置和系统默认；接入时确定并保存在 Run 输入中。
 
 manifest v2 的配置摘要来自准备后的可配置字段，包含模型覆盖、schema 默认值和工作区提示词，排除用户、线程、worker 等运行身份。Skill 条目的来源、版本与哈希来自首次授权解析；预加载内容另保存实际读取字节的摘要，manifest 生成不再次查询 Skill。完整提示词和 Skill 正文不持久化到 manifest。MCP 工具发现、Memory 与文件动态读取发生在后续执行边界，manifest 不承诺冻结其实际可用性或字节。
 
 ## 资源权限
 
 - `tools`、`knowledges`、`mcps` 和 `skills` 未配置时，使用当前用户可访问的全部资源；显式列表只保留列表中的资源；显式空列表不启用该类资源。
-- `ChatBotContext.subagents` 未配置或保存空列表时，使用当前用户可见的全部子智能体；显式列表才会收窄范围。
 - Agent 的知识库选择只能缩小用户已经拥有的读取权限。
 - Skill 选择控制 Prompt 和工具激活；共享 Skill 的文件投影按用户授权生成，个人 Skill 位于 UserWorkspace。
 资源快照只解决运行时“能看见哪些资源”。产生文件、知识库、MCP 或外部系统副作用的工具还要在执行处校验具体目标和当前身份。
 
 ## 文件和 Memory
 
-当前 Project 的 `workdir_path` 决定 Agent 的默认工作目录。普通 Agent 和子 Agent 共享根 Conversation 的 Workdir 与 execution runtime；子 Agent 的 child thread 只隔离 LangGraph checkpoint，不隔离文件。
+当前 Project 的 `workdir_path` 决定 Agent 的默认工作目录。单 Agent 使用当前 Conversation 的 Workdir 与 execution runtime。
 
-`agents/MEMORY.md` 只有在用户配置 `enable_memory=true`，且该文件存在并包含非空内容时，才由主 Agent 的 Memory middleware 读取并提供受限的记忆工具。它是用户主动维护的参考资料，不是系统指令；子 Agent 不直接使用该 middleware。Memory 读取和更新有独立的用户、Run、worker 和文件大小校验。
+`agents/MEMORY.md` 只有在用户配置 `enable_memory=true`，且该文件存在并包含非空内容时，才由主 Agent 的 Memory middleware 读取并提供受限的记忆工具。它是用户主动维护的参考资料，不是系统指令。Memory 读取和更新有独立的用户、Run、worker 和文件大小校验。
 
 Viewer、附件和 artifact API 通过持久化 Workspace/Workdir 读取文件，不连接 Agent execution runtime。沙盒虚拟路径、Viewer scope、对象 URL 和宿主机路径在各自边界中转换，不能互相替代。
 
@@ -81,7 +80,6 @@ Viewer、附件和 artifact API 通过持久化 Workspace/Workdir 读取文件�
 - [Context 与资源归一化](https://github.com/xerrors/Yuxi/blob/main/backend/package/yuxi/agents/context.py)
 - [BaseAgent](https://github.com/xerrors/Yuxi/blob/main/backend/package/yuxi/agents/base.py)
 - [Chatbot graph](https://github.com/xerrors/Yuxi/blob/main/backend/package/yuxi/agents/buildin/chatbot/graph.py)
-- [SubAgent graph](https://github.com/xerrors/Yuxi/blob/main/backend/package/yuxi/agents/buildin/subagent/graph.py)
 - [Memory middleware](https://github.com/xerrors/Yuxi/blob/main/backend/package/yuxi/agents/middlewares/memory.py)
 - [运行时上下文 unit](https://github.com/xerrors/Yuxi/tree/main/backend/test/unit/agents)
 - [Agent 主链路 E2E](https://github.com/xerrors/Yuxi/tree/main/backend/test/e2e)

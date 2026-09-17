@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 from abc import abstractmethod
-from contextlib import aclosing, suppress
+from contextlib import aclosing
 from typing import Any
 
 from langchain_core.messages import ToolMessage
@@ -13,7 +12,6 @@ from langgraph.types import Command
 from yuxi.agents.context import DEFAULT_MAX_EXECUTION_STEPS, BaseContext, resolve_agent_resource_options
 from yuxi.storage.postgres.manager import pg_manager
 from yuxi.utils import logger
-from yuxi.utils.hash_utils import subagent_child_thread_id
 from yuxi.utils.thread_utils import extract_thread_id as _metadata_thread_id
 
 
@@ -50,47 +48,6 @@ def _normalize_tool_event_data(data: Any) -> Any:
     if tool_message is None:
         return data
     return {**data, "output": tool_message}
-
-
-def _subagent_route_for_namespace(
-    routes: dict[tuple[str, ...], dict[str, str]], namespace: list[str]
-) -> dict[str, str] | None:
-    ns = tuple(namespace)
-    for path, route in sorted(routes.items(), key=lambda item: len(item[0]), reverse=True):
-        if ns[: len(path)] == path:
-            return route
-    return None
-
-
-async def _collect_subagent_routes(run, parent_thread_id: str, routes: dict[tuple[str, ...], dict[str, str]]) -> None:
-    subagents = getattr(run, "subagents", None)
-    if subagents is None:
-        return
-
-    try:
-        async for subagent in subagents:
-            path = tuple(getattr(subagent, "path", ()) or ())
-            subagent_slug = getattr(subagent, "name", None) or getattr(subagent, "graph_name", None)
-            cause = getattr(subagent, "cause", None)
-            tool_call_id = (
-                cause.get("tool_call_id") if isinstance(cause, dict) else getattr(subagent, "trigger_call_id", None)
-            )
-            state = getattr(subagent, "state", None)
-            metadata = getattr(subagent, "metadata", None)
-            thread_id = _metadata_thread_id(metadata) or _metadata_thread_id(state)
-            if not thread_id and isinstance(subagent_slug, str) and isinstance(tool_call_id, str) and tool_call_id:
-                thread_id = subagent_child_thread_id(parent_thread_id, subagent_slug, tool_call_id)
-            if path and isinstance(subagent_slug, str) and isinstance(tool_call_id, str) and tool_call_id and thread_id:
-                routes[path] = {
-                    "thread_id": thread_id,
-                    "parent_thread_id": parent_thread_id,
-                    "subagent_slug": subagent_slug,
-                    "tool_call_id": tool_call_id,
-                }
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        logger.debug(f"collect subagent stream routes failed: {exc}")
 
 
 def _recursion_limit_from_context(context: BaseContext, default: int) -> int:
@@ -137,7 +94,7 @@ class BaseAgent:
                 resource_fields = {
                     item["kind"]
                     for item in configurable_items.values()
-                    if item.get("kind") in {"tools", "knowledges", "mcps", "skills", "subagents"}
+                    if item.get("kind") in {"tools", "knowledges", "mcps", "skills"}
                 }
                 resource_options = await resolve_agent_resource_options(resource_fields, db=db, user=user)
                 for item in configurable_items.values():
@@ -209,59 +166,47 @@ class BaseAgent:
         ) as run:
             if on_prepared:
                 await on_prepared()
-            subagent_routes: dict[tuple[str, ...], dict[str, str]] = {}
-            route_task = asyncio.create_task(_collect_subagent_routes(run, context.thread_id, subagent_routes))
-            try:
-                async for event in run:
-                    params = event.get("params") or {}
-                    namespace = list(params.get("namespace") or [])
-                    method = event.get("method")
-                    data = params.get("data")
-                    sequence = event.get("seq")
-                    timestamp = params.get("timestamp")
-                    subagent_route = _subagent_route_for_namespace(subagent_routes, namespace)
+            async for event in run:
+                params = event.get("params") or {}
+                namespace = list(params.get("namespace") or [])
+                method = event.get("method")
+                data = params.get("data")
+                sequence = event.get("seq")
+                timestamp = params.get("timestamp")
 
-                    if method == "custom":
-                        yield "custom", data
-                        continue
-                    if method == "messages":
-                        msg, metadata = data
-                        metadata = dict(metadata or {})
-                        actual_thread_id = (subagent_route or {}).get("thread_id") or _metadata_thread_id(metadata)
-                        metadata["namespace"] = namespace
-                        metadata["stream_event"] = {
-                            "method": method,
-                            "namespace": namespace,
-                            "seq": sequence,
-                            "timestamp": timestamp,
-                        }
-                        if subagent_route:
-                            metadata.update(subagent_route)
-                        if actual_thread_id:
-                            metadata["thread_id"] = actual_thread_id
-                        yield "messages", (msg, metadata)
-                    elif method == "values" and not namespace:
-                        yield "values", data
-                    elif method in {"tasks", "tools", "lifecycle"}:
-                        if method == "tools":
-                            data = _normalize_tool_event_data(data)
-                        event_payload = {
-                            "method": method,
-                            "namespace": namespace,
-                            "seq": sequence,
-                            "timestamp": timestamp,
-                            "data": _json_safe(data),
-                        }
-                        actual_thread_id = (subagent_route or {}).get("thread_id") or _metadata_thread_id(params)
-                        if subagent_route:
-                            event_payload.update(subagent_route)
-                        if actual_thread_id:
-                            event_payload["thread_id"] = actual_thread_id
-                        yield "stream_event", event_payload
-            finally:
-                route_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await route_task
+                if method == "custom":
+                    yield "custom", data
+                    continue
+                if method == "messages":
+                    msg, metadata = data
+                    metadata = dict(metadata or {})
+                    actual_thread_id = _metadata_thread_id(metadata)
+                    metadata["namespace"] = namespace
+                    metadata["stream_event"] = {
+                        "method": method,
+                        "namespace": namespace,
+                        "seq": sequence,
+                        "timestamp": timestamp,
+                    }
+                    if actual_thread_id:
+                        metadata["thread_id"] = actual_thread_id
+                    yield "messages", (msg, metadata)
+                elif method == "values" and not namespace:
+                    yield "values", data
+                elif method in {"tasks", "tools", "lifecycle"}:
+                    if method == "tools":
+                        data = _normalize_tool_event_data(data)
+                    event_payload = {
+                        "method": method,
+                        "namespace": namespace,
+                        "seq": sequence,
+                        "timestamp": timestamp,
+                        "data": _json_safe(data),
+                    }
+                    actual_thread_id = _metadata_thread_id(params)
+                    if actual_thread_id:
+                        event_payload["thread_id"] = actual_thread_id
+                    yield "stream_event", event_payload
 
         # 流已耗尽、checkpoint 写入已完成；收尾消费者共享本次图的持久状态。
         yield "checkpoint", await graph.aget_state(input_config)

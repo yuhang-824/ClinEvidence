@@ -107,7 +107,6 @@ async def _startup(app: FastAPI) -> None:
         async with pg_manager.get_async_session_context() as session:
             repository = AgentRepository(session)
             await repository.ensure_default_agent()
-            await repository.ensure_general_purpose_subagent()
 
     await _initialize_startup_component(
         app,
