@@ -1,14 +1,16 @@
 """聊天模型加载、供应商协议适配与通用调用入口。"""
 
+from contextlib import aclosing
 from uuid import uuid4
 
 from langchain.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, convert_to_messages
 from langchain_openai import ChatOpenAI
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 
 from yuxi import get_version
 from yuxi.models.providers.cache import model_cache
+from yuxi.models.request_audit import audit_model_request, model_request_recorder
 from yuxi.utils import get_docker_safe_url, logger
 
 
@@ -128,6 +130,34 @@ class ChatCompletionsAdapter(ChatOpenAI):
     """在解析边界保留扩展字段，HTTP、重试和工具绑定由上游负责。"""
 
     preserve_reasoning: bool = Field(default=False, exclude=True)
+
+    @model_validator(mode="after")
+    def attach_request_audit(self):
+        """自定义 transport 也使用同一发送前采集边界。"""
+        # 复用 SDK 已拥有的连接池；不为每次 load_chat_model 创建未关闭的客户端。
+        client = self.http_async_client or self.root_async_client._client
+        hooks = client.event_hooks["request"]
+        if audit_model_request not in hooks:
+            hooks.append(audit_model_request)
+        return self
+
+    async def ainvoke(self, *args, **kwargs):
+        """将采集上下文限制在本次异步调用，异常时也恢复外层上下文。"""
+        token = model_request_recorder.set(None)
+        try:
+            return await super().ainvoke(*args, **kwargs)
+        finally:
+            model_request_recorder.reset(token)
+
+    async def astream(self, *args, **kwargs):
+        """流式迭代关闭时释放采集上下文，避免后续请求误用旧调用。"""
+        token = model_request_recorder.set(None)
+        try:
+            async with aclosing(super().astream(*args, **kwargs)) as stream:
+                async for chunk in stream:
+                    yield chunk
+        finally:
+            model_request_recorder.reset(token)
 
     def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
         """在上游丢弃扩展字段前读取推理，并归一化工具续片。"""

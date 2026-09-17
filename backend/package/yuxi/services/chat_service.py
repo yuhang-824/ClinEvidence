@@ -1104,6 +1104,8 @@ async def stream_agent_chat(
         model_audit = _build_model_message_audit_collector(meta, thread_id)
         tool_audit = _build_tool_message_audit_collector(model_audit)
         callbacks = list(langfuse_run.callbacks)
+        if model_audit is not None:
+            callbacks.append(model_audit)
         if model_request_recorder is not None:
             callbacks.append(model_request_recorder)
         stream_source = agent.stream_messages_with_state(
@@ -1334,7 +1336,10 @@ async def stream_agent_resume(
     trace_info: dict[str, Any] = {}
     last_agent_state_signature = ""
 
+    model_audit = _build_model_message_audit_collector(meta, thread_id)
     callbacks = list(langfuse_run.callbacks)
+    if model_audit is not None:
+        callbacks.append(model_audit)
     if model_request_recorder is not None:
         callbacks.append(model_request_recorder)
     final_state = None
@@ -1348,7 +1353,6 @@ async def stream_agent_resume(
     )
 
     protocol_message_ids: dict[tuple[str, str], str] = {}
-    model_audit = _build_model_message_audit_collector(meta, thread_id)
     tool_audit = _build_tool_message_audit_collector(model_audit)
 
     try:

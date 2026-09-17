@@ -48,6 +48,15 @@ class ModelMessageAuditRepository:
             raise ValueError(f"AgentRun 不存在: {run_id}")
 
         existing = await self._get(run_id, normalized_operation_id)
+        if existing is None and (metadata or {}).get("model_run_id"):
+            existing = await self._get(run_id, f"input:{metadata['model_run_id']}")
+            if existing is not None:
+                self._require_same_owner(existing, conversation_id=run.conversation_id, request_id=request_id)
+                existing.operation_id = normalized_operation_id
+                existing.sequence = sequence
+                existing.extra_metadata = {**dict(existing.extra_metadata or {}), **dict(metadata or {})}
+                await self.db.flush()
+                return existing, True
         if existing is not None:
             self._require_same_owner(existing, conversation_id=run.conversation_id, request_id=request_id)
             self._require_same_start(existing, sequence=sequence)
@@ -71,6 +80,61 @@ class ModelMessageAuditRepository:
         await self.db.flush()
         await self.db.refresh(message)
         return message, True
+
+    async def record_input(
+        self,
+        *,
+        run_id: str,
+        request_id: str,
+        thread_id: str,
+        worker_id: str,
+        model_run_id: str,
+        body: dict,
+        captured_at: datetime,
+    ) -> Message:
+        """持久化发送前输入，并按模型调用 ID 合并早到的生命周期事件。"""
+        run = await self.run_repo.lock_output_persistence(
+            run_id, worker_id=worker_id, conversation_thread_id=thread_id, request_id=request_id
+        )
+        if run is None:
+            raise ValueError(f"AgentRun 不存在: {run_id}")
+        result = await self.db.execute(
+            select(Message).where(
+                Message.run_id == run_id,
+                Message.role == "assistant",
+                Message.extra_metadata["model_run_id"].as_string() == model_run_id,
+            )
+        )
+        message = result.scalar_one_or_none()
+        if message is None:
+            message = Message(
+                conversation_id=run.conversation_id,
+                role="assistant",
+                content="",
+                message_type=MODEL_AUDIT_MESSAGE_TYPE,
+                run_id=run_id,
+                request_id=request_id,
+                delivery_status="complete",
+                operation_id=f"input:{model_run_id}",
+                started_at=captured_at,
+                execution_status="running",
+                extra_metadata={"audit_kind": "model", "model_run_id": model_run_id},
+            )
+            self.db.add(message)
+        self._require_same_owner(message, conversation_id=run.conversation_id, request_id=request_id)
+        metadata = dict(message.extra_metadata or {})
+        previous = metadata.get("model_input")
+        if previous and previous["body"] != body:
+            raise ValueError("同一模型调用的重试不能覆盖不同输入")
+        metadata["model_input"] = {
+            "body": body,
+            "captured_at": captured_at.isoformat() + "Z",
+            "source": "http_request_body",
+            "http_attempts": (previous or {}).get("http_attempts", 0) + 1,
+        }
+        message.extra_metadata = metadata
+        await self.db.flush()
+        return message
 
     async def finish(
         self,
@@ -128,6 +192,36 @@ class ModelMessageAuditRepository:
     async def get(self, *, run_id: str, operation_id: str) -> Message | None:
         """按同一 Run 的稳定来源键读取审计消息。"""
         return await self._get(run_id, operation_id)
+
+    async def fail_input(
+        self,
+        *,
+        run_id: str,
+        request_id: str,
+        thread_id: str,
+        worker_id: str,
+        model_run_id: str,
+        error_type: str,
+        finished_at: datetime,
+    ) -> None:
+        """模型报错时关闭已采集的输入，后续重试使用新的模型调用 ID。"""
+        await self.run_repo.lock_output_persistence(
+            run_id, worker_id=worker_id, conversation_thread_id=thread_id, request_id=request_id
+        )
+        result = await self.db.execute(
+            select(Message).where(
+                Message.run_id == run_id,
+                Message.role == "assistant",
+                Message.extra_metadata["model_run_id"].as_string() == model_run_id,
+                Message.execution_status == "running",
+            )
+        )
+        message = result.scalar_one_or_none()
+        if message is not None:
+            message.execution_status = "failed"
+            message.finished_at = finished_at
+            message.extra_metadata = {**dict(message.extra_metadata or {}), "model_error_type": error_type}
+            await self.db.flush()
 
     async def list_for_run(self, run_id: str) -> list[Message]:
         """返回 Run 的 Model 时间线，包括已发布为普通历史的最终消息。"""

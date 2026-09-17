@@ -29,14 +29,39 @@ class ChatStub(BaseHTTPRequestHandler):
     """记录模型实际可见工具，并输出确定性 SSE 回答。"""
 
     seen_tools = []
+    seen_bodies = []
 
     def do_POST(self):
         payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         type(self).seen_tools.append([item["function"]["name"] for item in payload.get("tools", [])])
+        type(self).seen_bodies.append(payload)
+        if "FAIL_INPUT_AUDIT" in json.dumps(payload["messages"][-1]):
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"error": {"message": "synthetic rejection", "type": "invalid_request_error"}}')
+            return
+        resumed = any(item["role"] == "tool" for item in payload["messages"])
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
-        for delta, finish in [({"role": "assistant", "content": EXPECTED}, None), ({}, "stop")]:
+        first_delta = (
+            {"role": "assistant", "content": EXPECTED}
+            if resumed
+            else {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "audit-todo",
+                        "type": "function",
+                        "function": {"name": "write_todos", "arguments": '{"todos": []}'},
+                    }
+                ],
+            }
+        )
+        for delta, finish in [(first_delta, None), ({}, "stop" if resumed else "tool_calls")]:
             chunk = {
                 "id": "chatcmpl-local",
                 "object": "chat.completion.chunk",
@@ -61,6 +86,7 @@ async def test_single_agent_runtime_and_retired_api(tmp_path):
     thread_id = agent_slug = child_thread_id = None
     provider_created = False
     ChatStub.seen_tools = []
+    ChatStub.seen_bodies = []
     server = ThreadingHTTPServer(("0.0.0.0", 0), ChatStub)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     async with pg_manager.get_async_session_context() as db:
@@ -76,8 +102,17 @@ async def test_single_agent_runtime_and_retired_api(tmp_path):
             password_hash=AuthUtils.hash_password(password),
         )
         db.add(user)
+        other_user = User(
+            uid=uid + "_other",
+            username=uid + "_other",
+            role="superadmin",
+            department_id=department_id,
+            password_hash=AuthUtils.hash_password(password),
+        )
+        db.add(other_user)
         await db.commit()
         user_id = user.id
+        other_user_id = other_user.id
     async with httpx.AsyncClient(base_url=os.getenv("TEST_BASE_URL", "http://localhost:5050"), timeout=60) as client:
 
         async def request(method, path, **kwargs):
@@ -162,6 +197,16 @@ async def test_single_agent_runtime_and_retired_api(tmp_path):
             assert run["status"] == "completed", run
             result = await request("GET", f"/api/agent/runs/{run_id}/result")
             assert result["output"] == EXPECTED
+            audits = (await request("GET", f"/api/chat/thread/{thread_id}/audits"))["audits"]
+            model_audits = [item for item in audits if item["type"] == "ai" and item["run_id"] == run_id]
+            assert len(model_audits) == len(ChatStub.seen_bodies) == 2
+            assert [item["model_input"]["body"] for item in model_audits] == ChatStub.seen_bodies
+            assert len({item["model_run_id"] for item in model_audits}) == 2
+            assert all(item["execution_status"] == "completed" for item in model_audits)
+            assert all(item["model_input"]["body"]["tools"] for item in model_audits)
+            assert any(item["role"] == "system" for item in ChatStub.seen_bodies[0]["messages"])
+            assert any(item["role"] == "tool" for item in ChatStub.seen_bodies[1]["messages"])
+            assert "local-test-only" not in json.dumps(audits)
             assert ChatStub.seen_tools
             assert all(
                 not ({"task", "subagent_start", "subagent_status", "subagent_await", "subagent_cancel"} & set(names))
@@ -172,6 +217,7 @@ async def test_single_agent_runtime_and_retired_api(tmp_path):
                 output = (await db.execute(select(Message).where(Message.id == saved.output_message_id))).scalar_one()
                 assert saved.status == "completed" and saved.run_type == "chat"
                 assert output.run_id == run_id and output.content == EXPECTED
+                assert output.extra_metadata["model_input"]["body"] == ChatStub.seen_bodies[-1]
                 children = (
                     (await db.execute(select(AgentRun).where(AgentRun.created_by_run_id == run_id))).scalars().all()
                 )
@@ -242,9 +288,49 @@ async def test_single_agent_runtime_and_retired_api(tmp_path):
             child_state = await request("GET", f"/api/chat/thread/{child_thread_id}/state")
             assert child_state["subagent_run"]["status"] == "failed"
             historical = await request("GET", f"/api/chat/thread/{thread_id}/history")
+            assert "model_input" not in json.dumps(historical)
+            failed_run_id = (
+                await request(
+                    "POST",
+                    "/api/agent/runs",
+                    json={"agent_slug": agent_slug, "thread_id": thread_id, "query": "FAIL_INPUT_AUDIT"},
+                )
+            )["run_id"]
+            for _ in range(60):
+                failed_run = (await request("GET", f"/api/agent/runs/{failed_run_id}"))["run"]
+                if failed_run["status"] in {"completed", "failed", "cancelled", "interrupted"}:
+                    break
+                await asyncio.sleep(1)
+            assert failed_run["status"] == "failed"
+            failed_inputs = [
+                item
+                for item in (await request("GET", f"/api/chat/thread/{thread_id}/audits"))["audits"]
+                if item["run_id"] == failed_run_id and item.get("model_input")
+            ]
+            assert failed_inputs and all(item["execution_status"] == "failed" for item in failed_inputs)
+            assert [item["model_input"]["body"] for item in failed_inputs] == ChatStub.seen_bodies[2:]
+            other_token = await request(
+                "POST", "/api/auth/token", data={"username": uid + "_other", "password": password}
+            )
+            assert (
+                await client.get(
+                    f"/api/chat/thread/{thread_id}/audits",
+                    headers={"Authorization": "Bearer " + other_token["access_token"]},
+                )
+            ).status_code == 404
+            async with pg_manager.get_async_session_context() as db:
+                attached = await db.get(User, user_id)
+                attached.role = "user"
+            assert (await client.get(f"/api/chat/thread/{thread_id}/audits")).status_code == 403
+            async with pg_manager.get_async_session_context() as db:
+                attached = await db.get(User, user_id)
+                attached.role = "superadmin"
             assert any(item.get("content") == EXPECTED for item in historical["history"])
             assert (await request("GET", f"/api/agent/runs/{run_id}/result"))["output"] == EXPECTED
         finally:
+            async with pg_manager.get_async_session_context() as db:
+                attached = await db.get(User, user_id)
+                attached.role = "superadmin"
             try:
                 if child_thread_id:
                     await request("DELETE", f"/api/chat/thread/{child_thread_id}")
@@ -259,6 +345,9 @@ async def test_single_agent_runtime_and_retired_api(tmp_path):
                     attached = (await db.execute(select(User).where(User.id == user_id))).scalar_one()
                     await UserRepository(db).delete_for_admin(attached)
                     attached.department_id = None
+                    other = await db.get(User, other_user_id)
+                    await UserRepository(db).delete_for_admin(other)
+                    other.department_id = None
                     await db.flush()
                     await db.execute(delete(Department).where(Department.id == department_id))
                     await db.commit()

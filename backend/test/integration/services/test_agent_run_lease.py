@@ -469,6 +469,69 @@ async def test_heartbeat_terminal_check_does_not_keep_lost_owner_alive(lease_dat
         await _cleanup_runs(session_factory, [thread_id])
 
 
+@pytest.mark.parametrize("input_first", [True, False])
+async def test_model_input_audit_merges_lifecycle_and_rejects_wrong_owner(lease_database, input_first):
+    """真实 PG 中输入和输出只占一行，重试保留正文，错误归属不能写入。"""
+    _engine, session_factory = lease_database
+    now = utc_now_naive()
+    owner = "input-audit-owner"
+    run_id, thread_id, _ = await _create_run(
+        session_factory, status="running", worker_id=owner, lease_expires_at=now + timedelta(minutes=1)
+    )
+    try:
+        async with session_factory() as db:
+            run = await db.get(AgentRun, run_id)
+            repo = ModelMessageAuditRepository(db)
+            args = dict(run_id=run_id, request_id=run.request_id, thread_id=thread_id, worker_id=owner)
+            request_args = dict(
+                **args,
+                model_run_id="model-input",
+                body={"messages": [{"role": "system", "content": "private"}]},
+                captured_at=now,
+            )
+            start_args = dict(
+                **args, operation_id="output-id", sequence=5, started_at=now, metadata={"model_run_id": "model-input"}
+            )
+            if input_first:
+                first = await repo.record_input(**request_args)
+                started, _ = await repo.start(**start_args)
+            else:
+                started, _ = await repo.start(**start_args)
+                first = await repo.record_input(**request_args)
+            assert first.id == started.id
+            await repo.record_input(**request_args)
+            with pytest.raises(ValueError, match="不能覆盖不同输入"):
+                await repo.record_input(**{**request_args, "body": {"messages": []}})
+            await repo.finish(
+                **args, operation_id="output-id", content="answer", finished_at=now, duration_ms=1, usage=None
+            )
+            await db.commit()
+        async with session_factory() as db:
+            rows = await ModelMessageAuditRepository(db).list_for_run(run_id)
+            assert len(rows) == 1 and rows[0].execution_status == "completed"
+            assert rows[0].operation_id == "output-id" and rows[0].sequence == 5
+            assert rows[0].extra_metadata["model_input"]["body"] == request_args["body"]
+            assert rows[0].extra_metadata["model_input"]["http_attempts"] == 2
+            for patch, reason in [
+                ({"worker_id": "wrong"}, "lease owner"),
+                ({"request_id": "wrong"}, "同一 thread 和 request"),
+                ({"thread_id": "wrong"}, "同一 thread 和 request"),
+            ]:
+                with pytest.raises(ValueError, match=reason):
+                    await ModelMessageAuditRepository(db).record_input(**{**request_args, **patch})
+            repo = ModelMessageAuditRepository(db)
+            await repo.record_input(**{**request_args, "model_run_id": "failed-model"})
+            await repo.fail_input(**args, model_run_id="failed-model", error_type="APIError", finished_at=now)
+            await db.commit()
+        async with session_factory() as db:
+            failed = await ModelMessageAuditRepository(db).get(run_id=run_id, operation_id="input:failed-model")
+            assert failed.execution_status == "failed"
+            assert failed.extra_metadata["model_input"]["body"] == request_args["body"]
+            assert failed.extra_metadata["model_error_type"] == "APIError"
+    finally:
+        await _cleanup_runs(session_factory, [thread_id])
+
+
 async def test_model_audit_lifecycle_is_idempotent_and_lease_fenced(lease_database):
     """Model start/finish 只允许当前 owner，并保持同一来源键单行。"""
     _engine, session_factory = lease_database

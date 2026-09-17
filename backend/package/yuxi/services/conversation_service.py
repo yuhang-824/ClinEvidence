@@ -609,6 +609,7 @@ def _serialize_model_audit(message: Any) -> dict[str, Any]:
         "type": "ai",
         "usage": dict(message.usage) if isinstance(message.usage, dict) else None,
         "model_run_id": model_run_id if isinstance(model_run_id, str) else None,
+        "model_input": metadata.get("model_input"),
         "content_blocks": content_blocks if isinstance(content_blocks, list) else [],
         "tool_calls": [_serialize_tool_call(tool_call) for tool_call in message.tool_calls],
     }

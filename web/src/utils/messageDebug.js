@@ -1,3 +1,26 @@
+/** 拆分完整请求体供输入详情展示，保留消息原序和全部工具定义。 */
+export function getModelInputSections(snapshot) {
+  const { messages = [], input, instructions, tools = [], ...parameters } = snapshot?.body || {}
+  const system = messages
+    .filter((item) => ['system', 'developer'].includes(item.role))
+    .map((item) => {
+      if (typeof item.content === 'string') return item.content
+      if (Array.isArray(item.content)) {
+        return item.content
+          .map((block) => block.text ?? JSON.stringify(block, null, 2))
+          .join('\n\n')
+      }
+      return JSON.stringify(item.content, null, 2)
+    })
+    .join('\n\n')
+  return {
+    system: system || instructions || '未发送独立系统消息',
+    messages: input ?? messages,
+    tools,
+    parameters
+  }
+}
+
 /** 将消息内容压缩为单行摘要。 */
 function summarizeContent(content, limit) {
   if (typeof content !== 'string') return ''

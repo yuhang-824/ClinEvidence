@@ -313,6 +313,15 @@
               概览
             </button>
             <button
+              v-if="selectedTarget.kind === 'item' && selectedTarget.item.role === 'ai'"
+              type="button"
+              :class="{ active: inspectorTab === 'input' }"
+              :aria-pressed="inspectorTab === 'input'"
+              @click="inspectorTab = 'input'"
+            >
+              输入
+            </button>
+            <button
               type="button"
               :class="{ active: inspectorTab === 'data' }"
               :aria-pressed="inspectorTab === 'data'"
@@ -389,6 +398,36 @@
             Run 阶段时间来自 PostgreSQL 状态时间点；消息与工具耗时来自各自审计记录。
           </p>
         </div>
+        <div v-else-if="inspectorTab === 'input'" class="inspector-data">
+          <template v-if="selectedModelInput">
+            <p class="inspector-note">
+              发送前的完整请求体 · HTTP 尝试 {{ selectedModelInput.http_attempts }} 次
+            </p>
+            <h4>System / Developer</h4>
+            <pre class="model-input-system">{{ modelInputSections.system }}</pre>
+            <h4>Messages · 完整消息</h4>
+            <JsonTreeViewer
+              :data="modelInputSections.messages"
+              :default-expanded-depth="2"
+              :show-toolbar="false"
+            />
+            <h4>Tools · 工具 Schema</h4>
+            <JsonTreeViewer
+              :data="modelInputSections.tools"
+              :default-expanded-depth="2"
+              :show-toolbar="false"
+            />
+            <h4>请求参数</h4>
+            <JsonTreeViewer
+              :data="modelInputSections.parameters"
+              :default-expanded-depth="1"
+              :show-toolbar="false"
+            />
+          </template>
+          <p v-else class="inspector-note">
+            该调用未记录输入。历史记录无法补录；新调用需使用已接入审计的模型协议。
+          </p>
+        </div>
         <div v-else class="inspector-data">
           <JsonTreeViewer
             :data="selectedTargetData"
@@ -431,6 +470,7 @@ import {
   constrainMessageDebugInspectorWidth,
   formatAuditDuration,
   formatMessageDebugContent,
+  getModelInputSections,
   isMessageDebugEntryInTimeRange,
   isMessageDebugTimelineMarkSelected,
   mergeMessageDebugAudits,
@@ -638,9 +678,10 @@ const runTraceById = computed(() => {
   return result
 })
 const combinedRuns = computed(() =>
-  [...runTraceById.value.values()].sort((left, right) =>
-    (left.timing?.created_at || '').localeCompare(right.timing?.created_at || '') ||
-    left.run_id.localeCompare(right.run_id)
+  [...runTraceById.value.values()].sort(
+    (left, right) =>
+      (left.timing?.created_at || '').localeCompare(right.timing?.created_at || '') ||
+      left.run_id.localeCompare(right.run_id)
   )
 )
 const baseGroups = computed(() =>
@@ -1026,6 +1067,8 @@ const selectedTargetData = computed(() => {
     records: group.items.map((item) => item.raw)
   }
 })
+const selectedModelInput = computed(() => selectedTarget.value?.item?.raw?.model_input || null)
+const modelInputSections = computed(() => getModelInputSections(selectedModelInput.value))
 const inspectorOverviewRows = computed(() => {
   if (!selectedTarget.value) return []
   if (selectedTarget.value.kind === 'run') {
@@ -1114,7 +1157,15 @@ const openRunInLangfuse = async (runId) => {
 const copySelectedTargetJson = async () => {
   if (!selectedTarget.value) return
   try {
-    await copyTextToClipboard(JSON.stringify(selectedTargetData.value, null, 2))
+    await copyTextToClipboard(
+      JSON.stringify(
+        inspectorTab.value === 'input'
+          ? (selectedModelInput.value?.body ?? null)
+          : selectedTargetData.value,
+        null,
+        2
+      )
+    )
     const copiedKey = selectedTargetKey.value
     copiedTargetKey.value = copiedKey
     message.success('已复制详情数据')
@@ -1871,6 +1922,15 @@ const copyAllTimelineJson = async () => {
 .inspector-actions {
   flex: 0 0 auto;
   gap: 2px;
+}
+
+.model-input-system {
+  max-height: 18rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  color: var(--gray-900);
 }
 
 .inspector-tabs {

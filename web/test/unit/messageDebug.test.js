@@ -11,6 +11,7 @@ import {
   extractMessageToolNames,
   formatAuditDuration,
   formatMessageDebugContent,
+  getModelInputSections,
   getMessageRequestId,
   getMessageRunId,
   groupMessageDebugEntries,
@@ -22,6 +23,56 @@ import {
   mergeMessageDebugRunGroups,
   resolveLangfuseRunUrl
 } from '../../src/utils/messageDebug.js'
+
+test('输入详情保留完整 system、工具续答、schema 和参数，历史输入允许缺失', () => {
+  const body = {
+    messages: [
+      { role: 'system', content: '长提示\n' + '循证医助'.repeat(5000) },
+      { role: 'user', content: '查指南' },
+      {
+        role: 'assistant',
+        tool_calls: [{ id: 'call-1', function: { name: 'search', arguments: '{}' } }]
+      },
+      { role: 'tool', tool_call_id: 'call-1', content: '证据片段' }
+    ],
+    tools: [
+      {
+        type: 'function',
+        function: { name: 'search', parameters: { type: 'object', properties: {} } }
+      }
+    ],
+    model: 'local',
+    temperature: 0.2,
+    stream: true
+  }
+  const sections = getModelInputSections({ body })
+  assert.equal(sections.system, body.messages[0].content)
+  assert.deepEqual(sections.messages, body.messages)
+  assert.deepEqual(sections.tools, body.tools)
+  assert.deepEqual(sections.parameters, { model: 'local', temperature: 0.2, stream: true })
+  assert.deepEqual(getModelInputSections(null).messages, [])
+  assert.equal(
+    getModelInputSections({
+      body: {
+        messages: [
+          {
+            role: 'system',
+            content: [
+              { type: 'text', text: '第一段\n原文' },
+              { type: 'text', text: '第二段' }
+            ]
+          }
+        ]
+      }
+    }).system,
+    '第一段\n原文\n\n第二段'
+  )
+  const merged = mergeMessageDebugAudits(
+    [],
+    [{ id: 17, type: 'ai', run_id: 'run-1', operation_id: 'model-1', model_input: { body } }]
+  )
+  assert.deepEqual(merged[0].model_input.body, body)
+})
 
 test('时间概览只高亮当前选中记录，选中 Run 时高亮其全部时间条', () => {
   assert.equal(isMessageDebugTimelineMarkSelected('run:run-a-0', 'run-a-0'), true)
@@ -181,8 +232,11 @@ test('AgentRun 投影补组时不重排未关联或重复 Run 的事实顺序', 
 test('模型调试条目只保留模型自身时间，Run 由独立列表分组', () => {
   const [entry] = buildMessageDebugEntries([
     {
-      id: 'ai-a', type: 'ai', run_id: 'run-a',
-      started_at: '2026-09-05T00:00:01Z', duration_ms: 800
+      id: 'ai-a',
+      type: 'ai',
+      run_id: 'run-a',
+      started_at: '2026-09-05T00:00:01Z',
+      duration_ms: 800
     }
   ])
   assert.equal(entry.durationMs, 800)

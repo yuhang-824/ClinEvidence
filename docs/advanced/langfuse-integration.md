@@ -53,6 +53,10 @@ docker compose up -d --force-recreate api worker
 
 PostgreSQL 同时按 LangGraph lifecycle 保存可见 Model 与 Tool 调用的关键审计事实，包括稳定来源键、严格顺序、观察时间、执行状态和 monotonic 耗时；Model 另外保存可靠的 Provider usage，Tool 保存 effective input、输出或错误。运行中的 `model_audit` AIMessage 和 `tool_audit` ToolMessage 不进入普通历史；Model 声明的 pending ToolCall 用于审批兼容，工具开始后的执行事实由 ToolMessage 单向覆盖，最终回答仍由 AgentRun 的 `output_message_id` 确定。超级管理员可在消息时序调试面板按 Run 查看交错时间线。本地审计不依赖 Langfuse 导出，也不宣称每条 AIMessage/ToolMessage 已关联 Langfuse observation。
 
+ClinEvidence 的 OpenAI 兼容异步聊天调用（DeepSeek、MiniMax 国内、LM Studio、vLLM）在 HTTP 发送前保存完整 JSON 请求体。打开 Debug、选中一条模型记录、点击“输入”，可查看 System / Developer、完整消息、工具 schema 和请求参数；复制按钮复制该请求体。每轮工具续答使用独立模型调用 ID 关联输入和输出，SDK 的相同请求重试记录尝试次数。记录不含 HTTP 请求头或 URL；输入保存失败时请求不继续发送。失败调用保留已保存输入，worker 崩溃留下的非终态记录由 Run 收敛。
+
+输入只通过超级管理员本人会话的审计接口返回，不进入普通聊天历史；输入中的用户内容与会话数据一起保存在本地 PostgreSQL，会增加存储量。历史记录无法补录，未采集协议在输入页明确提示缺失。Embedding、重排、同步脚本以及 Anthropic / Gemini 原生协议不属于此输入审计范围。
+
 ## 常见问题
 
 - **看不到 trace**：检查 API/worker 是否读取到两组密钥、Langfuse SDK 是否安装，以及 `LANGFUSE_BASE_URL` 是否可访问。

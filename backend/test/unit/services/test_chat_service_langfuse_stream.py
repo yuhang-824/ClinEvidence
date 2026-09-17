@@ -441,8 +441,6 @@ async def test_trace_flush_yields_to_other_requests_and_is_awaited(
         assert await asyncio.to_thread(flush_finished.wait, 3)
 
 
-
-
 @pytest.mark.asyncio
 async def test_persist_agent_run_langfuse_trace_commits_before_execution(monkeypatch: pytest.MonkeyPatch):
     calls: dict[str, object] = {}
@@ -678,8 +676,19 @@ async def test_stream_agent_chat_commits_before_stream_and_persists_langfuse_con
             "request_id": "req-1",
         }.items()
     )
-    assert calls["stream_kwargs"] == {
-        "callbacks": ["handler-1"],
+    stream_kwargs = dict(calls["stream_kwargs"])
+    callbacks = stream_kwargs.pop("callbacks")
+    assert callbacks[0] == "handler-1"
+    assert len(callbacks) == 2
+    audit = callbacks[1]
+    assert isinstance(audit, svc.ModelMessageAuditCollector)
+    assert (audit.run_id, audit.request_id, audit.thread_id, audit.worker_id) == (
+        "run-1",
+        "req-1",
+        "thread-1",
+        "worker-1",
+    )
+    assert stream_kwargs == {
         "metadata": {"langfuse_user_id": "user-1", "langfuse_session_id": "thread-1"},
         "tags": ["yuxi", "chat"],
     }

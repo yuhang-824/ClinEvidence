@@ -7,6 +7,9 @@ from datetime import UTC, datetime
 from time import monotonic
 from typing import Any
 
+from langchain_core.callbacks import AsyncCallbackHandler
+
+from yuxi.models.request_audit import model_request_recorder
 from yuxi.repositories.model_message_audit_repository import ModelMessageAuditRepository
 from yuxi.storage.postgres.manager import pg_manager
 
@@ -21,8 +24,11 @@ class _ModelOperation:
     content_blocks: list[dict[str, Any]] = field(default_factory=list)
 
 
-class ModelMessageAuditCollector:
+class ModelMessageAuditCollector(AsyncCallbackHandler):
     """按 message lifecycle 串行提交 Model 审计短事务。"""
+
+    run_inline = True
+    raise_error = True
 
     def __init__(self, *, run_id: str, request_id: str, thread_id: str, worker_id: str):
         self.run_id = run_id
@@ -30,6 +36,45 @@ class ModelMessageAuditCollector:
         self.thread_id = thread_id
         self.worker_id = worker_id
         self._operations: dict[tuple[str, str], _ModelOperation] = {}
+
+    async def on_chat_model_start(self, serialized, messages, *, run_id, **kwargs) -> None:
+        """在同一异步调用上下文绑定模型 ID，隔离并发模型与工具续答。"""
+        model_request_recorder.set((str(run_id), self.record_input))
+
+    async def on_llm_end(self, response, *, run_id, **kwargs) -> None:
+        """模型结束后清理当前调用绑定。"""
+        binding = model_request_recorder.get()
+        if binding is not None and binding[0] == str(run_id):
+            model_request_recorder.set(None)
+
+    async def on_llm_error(self, error, *, run_id, **kwargs) -> None:
+        """失败请求保留输入并标明失败；不保存可能带凭据的异常正文。"""
+        try:
+            async with pg_manager.get_async_session_context() as db:
+                await ModelMessageAuditRepository(db).fail_input(
+                    run_id=self.run_id,
+                    request_id=self.request_id,
+                    thread_id=self.thread_id,
+                    worker_id=self.worker_id,
+                    model_run_id=str(run_id),
+                    error_type=type(error).__name__,
+                    finished_at=datetime.now(UTC).replace(tzinfo=None),
+                )
+        finally:
+            await self.on_llm_end(None, run_id=run_id)
+
+    async def record_input(self, model_run_id: str, body: dict) -> None:
+        """在发送前提交完整正文，SDK 重试仍属于同一模型调用。"""
+        async with pg_manager.get_async_session_context() as db:
+            await ModelMessageAuditRepository(db).record_input(
+                run_id=self.run_id,
+                request_id=self.request_id,
+                thread_id=self.thread_id,
+                worker_id=self.worker_id,
+                model_run_id=model_run_id,
+                body=body,
+                captured_at=datetime.now(UTC).replace(tzinfo=None),
+            )
 
     async def consume(self, message: Any, metadata: dict[str, Any] | None) -> None:
         """消费一条 raw messages ProtocolEvent；非生命周期消息保持无副作用。"""

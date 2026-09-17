@@ -137,6 +137,7 @@ async def test_get_thread_message_audits_view_serializes_model_and_tool_facts(mo
         "usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14},
         "namespace": ["agent", "model"],
         "model_run_id": "langgraph-model-1",
+        "model_input": None,
         "content_blocks": [{"type": "text", "text": "模型输出"}],
         "reasoning_content": "",
         "tool_calls": [],
