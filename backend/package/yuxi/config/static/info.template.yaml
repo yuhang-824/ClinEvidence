@@ -1,0 +1,20 @@
+# 默认品牌；本地覆盖文件的读取规则见 docs/advanced/branding.md。
+organization:
+  name: "ClinEvidence"
+  logo: "/favicon.svg"
+  avatar: "/favicon.svg"
+  login_bg: "/login-bg.jpg"
+
+branding:
+  name: "ClinEvidence"
+  title: "ClinEvidence 循证医助"
+  subtitle: "诊疗辅助与病历质控 · 开发演示项目"
+  subtitles:
+    - "基于 Yuxi 构建，医疗功能按阶段开发"
+    - "从原文证据、检索评测到可复算的质控"
+    - "使用合成或获准资料，记录真实验证结果"
+
+footer:
+  copyright: "© 2026 ClinEvidence · 基于 Yuxi v{{YUXI_VERSION}}"
+  user_agreement_url: "/protocols/user-agreement.template.html"
+  privacy_policy_url: "/protocols/privacy-policy.template.html"

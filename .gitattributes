@@ -1,0 +1,2 @@
+# 跨平台检出保留 LF，保证 shell 启动和源码模板测试可复现。
+* text=auto eol=lf
