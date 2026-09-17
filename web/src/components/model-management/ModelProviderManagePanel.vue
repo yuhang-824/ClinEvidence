@@ -748,12 +748,6 @@ defineExpose({
       />
     </div>
 
-    <a-alert
-      type="info"
-      show-icon
-      message="线上对话：DeepSeek、MiniMax 国内；本地推理：LM Studio、vLLM；向量与重排保留线上配置。"
-      description="配置服务并启用模型后，到基本设置选择默认模型。向量模型需单独配置；服务返回的通用模型列表请核对类型，必要时手动添加。"
-    />
     <template v-for="group in providerGroups" :key="group.key">
       <div v-if="group.providers.length" class="provider-section-header">
         {{ group.label }}（{{ group.providers.length }}）
