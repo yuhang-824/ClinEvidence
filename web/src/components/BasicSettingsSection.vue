@@ -59,21 +59,6 @@
       <div class="services-grid">
         <div class="service-link-card">
           <div class="service-info">
-            <h4>Neo4j 浏览器</h4>
-            <p>图数据库管理界面</p>
-          </div>
-          <a-button
-            type="default"
-            class="lucide-icon-btn"
-            @click="openLink('http://localhost:7474/')"
-            :icon="h(Globe, { size: 18 })"
-          >
-            访问
-          </a-button>
-        </div>
-
-        <div class="service-link-card">
-          <div class="service-info">
             <h4>API 接口文档</h4>
             <p>系统接口文档和调试工具</p>
           </div>
