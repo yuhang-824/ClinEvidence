@@ -71,6 +71,9 @@ class KnowledgeBaseManager:
         unsupported_types = set()
         for row in rows:
             kb_type = row.kb_type or "milvus"
+            if kb_type in {"dify", "notion"}:
+                logger.warning(f"Retired knowledge connector is unavailable: kb_id={row.kb_id}, type={kb_type}")
+                continue
             if KnowledgeBaseFactory.is_type_supported(kb_type):
                 kb_types_in_use.add(kb_type)
             else:
@@ -1136,10 +1139,6 @@ class KnowledgeBaseManager:
 
         if additional_params is not None:
             current_additional_params = kb.additional_params or {}
-            current_graph_config = current_additional_params.get("graph_build_config") or {}
-            if current_graph_config.get("locked") and "graph_build_config" in additional_params:
-                raise ValueError("图谱抽取配置已锁定，请使用图谱重置接口重新配置")
-
             merged_additional_params = kb_class.normalize_additional_params(
                 deep_merge(current_additional_params, additional_params)
             )

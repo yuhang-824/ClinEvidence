@@ -328,35 +328,7 @@ export const documentApi = {
 // === 图谱构建分组 ===
 // =============================================================================
 
-function graphBuildUrl(kbId, action) {
-  return `/api/knowledge/databases/${kbId}/graph-build/${action}`
-}
 
-export const graphBuildApi = {
-  getStatus: async (kbId) => {
-    return apiAdminGet(graphBuildUrl(kbId, 'status'))
-  },
-
-  getFailedChunks: async (kbId, limit = 10) => {
-    return apiAdminGet(`${graphBuildUrl(kbId, 'failed-chunks')}?limit=${limit}`)
-  },
-
-  configure: async (kbId, data) => {
-    return apiAdminPost(graphBuildUrl(kbId, 'config'), data)
-  },
-
-  startIndex: async (kbId) => {
-    return apiAdminPost(graphBuildUrl(kbId, 'index'), {})
-  },
-
-  reset: async (kbId, data) => {
-    return apiAdminPost(graphBuildUrl(kbId, 'reset'), data)
-  },
-
-  reconcile: async (kbId, mode = 'failed') => {
-    return apiAdminPost(graphBuildUrl(kbId, 'reconcile'), { mode })
-  }
-}
 
 // =============================================================================
 // === 思维导图分组 ===
@@ -479,18 +451,6 @@ export const fileApi = {
     return `/api/knowledge/files/upload?kb_id=${encodeURIComponent(kbId)}`
   },
 
-  /**
-   * 抓取 URL 内容
-   * @param {string} url - 目标 URL
-   * @param {string} kbId - 知识库 ID
-   * @returns {Promise} - 抓取结果
-   */
-  fetchUrl: async (url, kbId = null) => {
-    return apiAdminPost('/api/knowledge/files/fetch-url', {
-      url,
-      kb_id: kbId
-    })
-  },
 
   /**
    * 从工作区导入文件到知识库 MinIO 暂存区

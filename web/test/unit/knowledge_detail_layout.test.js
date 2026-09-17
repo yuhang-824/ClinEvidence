@@ -14,7 +14,7 @@ test('知识库详情提供面板插槽并校验深链接 Tab', () => {
   assert.match(source, /<template #actions>/)
   assert.match(source, /<template #panel-filetable>/)
   assert.match(source, /<template #panel-query>/)
-  assert.match(source, /<template #panel-graph>/)
+  assert.doesNotMatch(source, /<template #panel-graph>/)
   assert.match(source, /<template #panel-evaluation>/)
   assert.match(source, /availableTabs\.some\(\(tab\) => tab\.key === requestedTab\)/)
   assert.match(

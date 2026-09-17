@@ -16,13 +16,11 @@
   },
   "dependencies": {
     "@ant-design/icons-vue": "^7.0.1",
-    "@antv/g6": "^5.1.1",
     "@lucide/vue": "^1.34.0",
     "@opencode-ai/models": "0.0.55",
     "@vscode/markdown-it-katex": "^1.1.2",
     "@vueuse/core": "^14.4.0",
     "ant-design-vue": "^4.2.6",
-    "d3": "^7.9.0",
     "dayjs": "^1.11.23",
     "dompurify": "^3.4.14",
     "echarts": "^6.1.0",

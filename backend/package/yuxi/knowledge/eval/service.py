@@ -371,7 +371,6 @@ class EvaluationService:
             "concurrency_count": int(params.get("concurrency_count", 10)),
             "llm_model_spec": params.get("llm_model_spec"),
             "generation_mode": params.get("generation_mode", "vector"),
-            "graph_expand_top_k": int(params.get("graph_expand_top_k", 1)),
         }
         try:
             async with pg_manager.get_async_session_context() as session:
@@ -414,27 +413,20 @@ class EvaluationService:
         concurrency_count: int,
         llm_model_spec: str,
         generation_mode: str = "vector",
-        graph_expand_top_k: int = 1,
         created_by: str = "system",
     ) -> dict[str, Any]:
         dataset_id = f"dataset_{uuid.uuid4().hex[:8]}"
         count = int(count)
         neighbors_count = int(neighbors_count)
         concurrency_count = normalize_generation_concurrency_count(concurrency_count)
-        graph_expand_top_k = min(max(1, int(graph_expand_top_k)), 3)
-        if generation_mode not in {"vector", "graph_enhanced"}:
+        if generation_mode not in {"vector"}:
             raise ValueError("不支持的评估基准生成方式")
-        if generation_mode == "graph_enhanced":
-            indexed_count = await self.chunk_repo.count_graph_indexed_by_kb_id(kb_id)
-            if indexed_count <= 0:
-                raise ValueError("当前知识库尚未完成图索引，无法使用图增强构建")
         generation_params = {
             "count": count,
             "neighbors_count": neighbors_count,
             "concurrency_count": concurrency_count,
             "llm_model_spec": llm_model_spec,
             "generation_mode": generation_mode,
-            "graph_expand_top_k": graph_expand_top_k,
         }
         build_metadata = {
             "source": "generated",
@@ -487,14 +479,12 @@ class EvaluationService:
         concurrency_count = normalize_generation_concurrency_count(payload.get("concurrency_count"))
         llm_model_spec = payload.get("llm_model_spec")
         generation_mode = payload.get("generation_mode") or "vector"
-        graph_expand_top_k = min(max(1, int(payload.get("graph_expand_top_k", 1))), 3)
         generation_params = {
             "count": total_count,
             "neighbors_count": neighbors_count,
             "concurrency_count": concurrency_count,
             "llm_model_spec": llm_model_spec,
             "generation_mode": generation_mode,
-            "graph_expand_top_k": graph_expand_top_k,
         }
 
         existing_count = await self.eval_repo.count_dataset_items(dataset_id)
@@ -591,7 +581,6 @@ class EvaluationService:
                     llm_model_spec=llm_model_spec,
                     concurrency_count=concurrency_count,
                     generation_mode=generation_mode,
-                    graph_expand_top_k=graph_expand_top_k,
                     progress_base=existing_count,
                     total_progress=total_count,
                     progress_cb=report_progress,

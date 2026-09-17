@@ -206,16 +206,6 @@
         </div>
       </template>
 
-      <template #panel-graph>
-        <div v-if="isMilvus && activeTab === 'graph'" class="tab-panel">
-          <KnowledgeGraphSection
-            :visible="true"
-            :active="activeTab === 'graph'"
-            :readonly="!canManageDatabase"
-            @toggle-visible="() => {}"
-          />
-        </div>
-      </template>
 
       <template #panel-evaluation>
         <div v-if="isMilvus && activeTab === 'evaluation'" class="tab-panel evaluation-panel">
@@ -347,44 +337,7 @@
                   :loading="chunkPresetLoading"
                 />
               </a-form-item>
-              <template v-if="isDifyKb">
-                <a-form-item label="Dify API URL" name="dify_api_url">
-                  <a-input
-                    v-model:value="editForm.dify_api_url"
-                    placeholder="例如: https://api.dify.ai/v1"
-                  />
-                </a-form-item>
-                <a-form-item label="Dify Token" name="dify_token">
-                  <a-input-password
-                    v-model:value="editForm.dify_token"
-                    placeholder="请输入 Dify API Token"
-                  />
-                </a-form-item>
-                <a-form-item label="Dataset ID" name="dify_dataset_id">
-                  <a-input
-                    v-model:value="editForm.dify_dataset_id"
-                    placeholder="请输入 Dify dataset_id"
-                  />
-                </a-form-item>
-              </template>
 
-              <template v-if="isNotionKb">
-                <a-form-item label="Notion Token" name="notion_token">
-                  <a-input-password
-                    v-model:value="editForm.notion_token"
-                    placeholder="留空则保持现有 Token 或使用环境变量"
-                  />
-                </a-form-item>
-                <a-form-item label="Data Source ID" name="notion_data_source_id">
-                  <a-input
-                    v-model:value="editForm.notion_data_source_id"
-                    placeholder="请输入 Notion data_source_id"
-                  />
-                </a-form-item>
-                <a-form-item label="Notion API Version" name="notion_version">
-                  <a-input v-model:value="editForm.notion_version" placeholder="2026-03-11" />
-                </a-form-item>
-              </template>
             </div>
           </a-tab-pane>
 
@@ -438,7 +391,6 @@ import {
   FolderUp,
   Hash,
   LoaderCircle,
-  Network,
   Pencil,
   Search,
   Upload
@@ -462,9 +414,6 @@ import { DEFAULT_CHUNK_PRESET_ID } from '@/utils/chunkUtils'
 import { kbUtils } from '@/utils/kb_utils'
 import { createAsyncPanel } from '@/utils/asyncPanel'
 
-const KnowledgeGraphSection = createAsyncPanel(
-  () => import('@/components/KnowledgeGraphSection.vue')
-)
 const MindMapSection = createAsyncPanel(() => import('@/components/MindMapSection.vue'))
 const KnowledgeEvaluationWorkspace = createAsyncPanel(
   () => import('@/components/evaluation/KnowledgeEvaluationWorkspace.vue')
@@ -489,8 +438,6 @@ const kbType = computed(() =>
   isCurrentDatabaseLoaded.value ? database.value.kb_type?.toLowerCase() || 'milvus' : ''
 )
 const isMilvus = computed(() => kbType.value === 'milvus')
-const isDifyKb = computed(() => kbType.value === 'dify')
-const isNotionKb = computed(() => kbType.value === 'notion')
 const isConnector = computed(
   () => isCurrentDatabaseLoaded.value && kbUtils.isReadOnlyDatabase(database.value)
 )
@@ -499,7 +446,6 @@ const tabs = computed(() => {
     return [
       { key: 'filetable', label: '文件管理', icon: FileText },
       { key: 'query', label: '检索测试', icon: Search, forceRender: true },
-      { key: 'graph', label: '知识图谱', icon: Network },
       { key: 'evaluation', label: '评估', icon: BarChart3 }
     ]
   }
@@ -510,7 +456,7 @@ const tabs = computed(() => {
 const visibleTabs = computed(() =>
   canManageDatabase.value
     ? tabs.value
-    : tabs.value.filter((tab) => ['filetable', 'query', 'graph'].includes(tab.key))
+    : tabs.value.filter((tab) => ['filetable', 'query'].includes(tab.key))
 )
 const activeTab = ref('filetable')
 
@@ -909,12 +855,6 @@ const editForm = reactive({
   name: '',
   description: '',
   chunk_preset_id: DEFAULT_CHUNK_PRESET_ID,
-  dify_api_url: '',
-  dify_token: '',
-  dify_dataset_id: '',
-  notion_token: '',
-  notion_data_source_id: '',
-  notion_version: '2026-03-11'
 })
 
 const rules = {
@@ -994,12 +934,6 @@ const showEditModal = () => {
   editForm.description = database.value.description || ''
   editForm.chunk_preset_id =
     database.value.additional_params?.chunk_preset_id || DEFAULT_CHUNK_PRESET_ID
-  editForm.dify_api_url = database.value.additional_params?.dify_api_url || ''
-  editForm.dify_token = database.value.additional_params?.dify_token || ''
-  editForm.dify_dataset_id = database.value.additional_params?.dify_dataset_id || ''
-  editForm.notion_token = ''
-  editForm.notion_data_source_id = database.value.additional_params?.notion_data_source_id || ''
-  editForm.notion_version = database.value.additional_params?.notion_version || '2026-03-11'
   editShareConfig.value = database.value.share_config || {
     version: 2,
     read_scope: { access_level: 'global', department_ids: [], user_uids: [] },
@@ -1039,44 +973,9 @@ const handleEditSubmit = async () => {
       share_config: editShareConfig.value
     }
 
-    if (isDifyKb.value) {
-      if (
-        !editForm.dify_api_url?.trim() ||
-        !editForm.dify_token?.trim() ||
-        !editForm.dify_dataset_id?.trim()
-      ) {
-        editModalTab.value = 'basic'
-        message.error('请完整填写 Dify API URL、Token 和 Dataset ID')
-        return
-      }
-      if (!editForm.dify_api_url.trim().endsWith('/v1')) {
-        editModalTab.value = 'basic'
-        message.error('Dify API URL 必须以 /v1 结尾')
-        return
-      }
-      updateData.additional_params = {
-        dify_api_url: editForm.dify_api_url.trim(),
-        dify_token: editForm.dify_token.trim(),
-        dify_dataset_id: editForm.dify_dataset_id.trim()
-      }
-    } else if (isNotionKb.value) {
-      if (!editForm.notion_data_source_id?.trim()) {
-        editModalTab.value = 'basic'
-        message.error('请填写 Notion Data Source ID')
-        return
-      }
-      updateData.additional_params = {
-        notion_data_source_id: editForm.notion_data_source_id.trim(),
-        notion_version: editForm.notion_version?.trim() || '2026-03-11'
-      }
-      if (editForm.notion_token?.trim()) {
-        updateData.additional_params.notion_token = editForm.notion_token.trim()
-      }
-    } else {
       updateData.additional_params = {
         chunk_preset_id: editForm.chunk_preset_id || DEFAULT_CHUNK_PRESET_ID
       }
-    }
 
     if (searchConfigPanelRef.value?.hasChanges?.()) {
       const searchConfigSaved = await searchConfigPanelRef.value.save({ notify: false })

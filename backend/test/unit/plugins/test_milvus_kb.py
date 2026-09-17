@@ -187,18 +187,6 @@ async def test_cleanup_database_resources_offloads_milvus_cleanup(monkeypatch):
         lambda kb_id, using: record_cleanup("drop_collection"),
     )
 
-    class FakeGraphVectorStore:
-        def __init__(self):
-            record_cleanup("graph_init")
-
-        def drop_graph_collections(self, kb_id):
-            record_cleanup("drop_graph_collections")
-
-    monkeypatch.setattr(
-        "yuxi.knowledge.graphs.milvus_graph_vector_store.MilvusGraphVectorStore",
-        FakeGraphVectorStore,
-    )
-
     async def delete_base(self, kb_id):
         calls.append("delete_base")
         return {"message": "删除成功"}
@@ -208,7 +196,7 @@ async def test_cleanup_database_resources_offloads_milvus_cleanup(monkeypatch):
     result = await kb.cleanup_database_resources("db")
 
     assert result == {"message": "删除成功"}
-    assert calls == ["has_collection", "drop_collection", "graph_init", "drop_graph_collections", "delete_base"]
+    assert calls == ["has_collection", "drop_collection", "delete_base"]
     assert cleanup_threads
     assert all(thread_id != event_loop_thread for thread_id in cleanup_threads)
 
@@ -481,20 +469,15 @@ async def test_delete_file_chunks_only_resets_file_stats(monkeypatch):
     assert file_repo.update_calls == [("file-1", "db", {"chunk_count": 0, "token_count": 0})]
 
 
-@pytest.mark.parametrize("failure", ["graph", "vector"])
-async def test_delete_file_keeps_metadata_when_external_deletion_fails(monkeypatch, failure):
+async def test_delete_file_keeps_metadata_when_external_deletion_fails(monkeypatch):
     """外部删除失败必须显式失败，并保留文件与 chunk 的重试依据。"""
     error = RuntimeError("external storage unavailable")
     chunk_repo = types.SimpleNamespace(
-        count_graph_indexed_by_file_id=AsyncMock(return_value=1 if failure == "graph" else 0),
         delete_by_file_id=AsyncMock(),
     )
     monkeypatch.setattr(milvus_module, "KnowledgeChunkRepository", lambda: chunk_repo)
     file_repo = FakeKnowledgeFileRepository({"file-1": make_file_record(chunk_count=2, token_count=10)})
     patch_file_repository(monkeypatch, file_repo)
-    monkeypatch.setattr(
-        "yuxi.knowledge.graphs.milvus_graph_service.MilvusGraphService.delete_file_graph", AsyncMock(side_effect=error)
-    )
     kb = make_kb(FakeCollection())
     kb._get_existing_milvus_collection = AsyncMock(return_value=FakeCollection())
     kb._delete_file_chunks_from_milvus = AsyncMock(side_effect=error)
@@ -514,11 +497,6 @@ async def test_database_cleanup_stops_when_collection_drop_fails(monkeypatch):
     error = RuntimeError("Milvus unavailable")
     monkeypatch.setattr(milvus_module.utility, "has_collection", lambda *args, **kwargs: True)
     monkeypatch.setattr(milvus_module.utility, "drop_collection", Mock(side_effect=error))
-    graph_cleanup = Mock()
-    monkeypatch.setattr(
-        "yuxi.knowledge.graphs.milvus_graph_vector_store.MilvusGraphVectorStore",
-        lambda: types.SimpleNamespace(drop_graph_collections=graph_cleanup),
-    )
     base_cleanup = AsyncMock(return_value={"message": "success"})
     monkeypatch.setattr(KnowledgeBase, "cleanup_database_resources", base_cleanup)
     kb = make_kb(FakeCollection())
@@ -528,7 +506,6 @@ async def test_database_cleanup_stops_when_collection_drop_fails(monkeypatch):
         await kb.cleanup_database_resources("db")
 
     assert caught.value is error
-    graph_cleanup.assert_not_called()
     base_cleanup.assert_not_awaited()
 
 

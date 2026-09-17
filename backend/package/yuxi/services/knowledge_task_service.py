@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 
-from yuxi.knowledge.graphs.milvus_graph_service import MilvusGraphService
 from yuxi.knowledge.runtime import knowledge_base
 from yuxi.knowledge.utils import params_for_uploaded_document
 from yuxi.repositories.knowledge_file_repository import KnowledgeFileRepository
@@ -329,30 +328,3 @@ async def run_virtual_folder_migration(context: TaskContext) -> dict:
         kb_id=context.payload["kb_id"],
         operator_id=context.payload["operator_id"],
     )
-
-
-async def run_knowledge_graph(context: TaskContext) -> dict:
-    """根据持久 action 重建图谱构建或向量修复任务。"""
-    payload = context.payload
-    kb_id = payload["kb_id"]
-    service = MilvusGraphService()
-    if payload.get("action") == "reconcile":
-        mode = payload.get("reconcile_mode") or "failed"
-        await context.set_progress(5.0, "准备修复图谱向量索引")
-        reconcile_result = await service.reconcile_vectors(kb_id, all_vectors=mode == "all_vectors")
-        result = await service.build_pending_chunks(kb_id, context=context)
-        await context.raise_if_cancelled()
-        result["reconcile"] = reconcile_result
-        await context.set_result(result)
-        await context.set_progress(100.0, "图谱向量索引修复完成")
-        return result
-
-    await context.set_progress(5.0, "准备构建图谱")
-    result = await service.build_pending_chunks(kb_id, context=context)
-    await context.raise_if_cancelled()
-    await context.set_result(result)
-    await context.set_progress(
-        100.0,
-        f"图谱构建执行完成，成功 {result['success']} 个，抽取失败 {result['extraction_failed']} 个",
-    )
-    return result

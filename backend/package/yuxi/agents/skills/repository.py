@@ -1,10 +1,17 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.storage.postgres.models_business import Skill
 from yuxi.utils.datetime_utils import utc_now_naive
+
+RETIRED_BUILTIN_SKILLS = {"deep-research", "mysql-reporter"}
+
+
+def active_skill_clause():
+    """排除退役内置技能，保留历史记录与用户自建技能。"""
+    return or_(Skill.source_type != "builtin", Skill.slug.not_in(RETIRED_BUILTIN_SKILLS))
 
 
 class SkillRepository:
@@ -12,24 +19,29 @@ class SkillRepository:
         self.db = db_session
 
     async def list_all(self) -> list[Skill]:
-        result = await self.db.execute(select(Skill).order_by(Skill.updated_at.desc(), Skill.id.desc()))
+        result = await self.db.execute(
+            select(Skill).where(active_skill_clause()).order_by(Skill.updated_at.desc(), Skill.id.desc())
+        )
         return list(result.scalars().all())
 
     async def list_enabled(self) -> list[Skill]:
         result = await self.db.execute(
-            select(Skill).where(Skill.enabled.is_(True)).order_by(Skill.updated_at.desc(), Skill.id.desc())
+            select(Skill)
+            .where(Skill.enabled.is_(True), active_skill_clause())
+            .order_by(Skill.updated_at.desc(), Skill.id.desc())
         )
         return list(result.scalars().all())
 
     async def get_by_slug(self, slug: str, *, for_update: bool = False) -> Skill | None:
-        stmt = select(Skill).where(Skill.slug == slug)
+        stmt = select(Skill).where(Skill.slug == slug, active_skill_clause())
         if for_update:
             stmt = stmt.with_for_update()
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
     async def exists_slug(self, slug: str) -> bool:
-        return (await self.get_by_slug(slug)) is not None
+        result = await self.db.execute(select(Skill.id).where(Skill.slug == slug))
+        return result.scalar_one_or_none() is not None
 
     async def create(
         self,

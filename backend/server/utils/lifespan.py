@@ -108,8 +108,6 @@ async def _startup(app: FastAPI) -> None:
             repository = AgentRepository(session)
             await repository.ensure_default_agent()
             await repository.ensure_general_purpose_subagent()
-            await repository.ensure_web_search_subagent()
-            await repository.ensure_deep_research_agents()
 
     await _initialize_startup_component(
         app,
@@ -200,14 +198,6 @@ async def _shutdown_component(name: str, operation: Callable[[], object]) -> Non
         logger.error(f"Shutdown component failed: component={name}, type={type(exc).__name__}")
 
 
-def _close_neo4j_connection() -> object:
-    """关闭共享图数据库连接。"""
-
-    from yuxi.storage.neo4j import close_shared_neo4j_connection
-
-    return close_shared_neo4j_connection()
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """确保 startup 任意阶段失败时仍执行已取得资源的补偿清理。"""
@@ -221,5 +211,4 @@ async def lifespan(app: FastAPI):
         app.state.startup_complete = False
         await _shutdown_component("sandbox_provider", shutdown_sandbox_provider)
         await _shutdown_component("queue_clients", close_queue_clients)
-        await _shutdown_component("neo4j", _close_neo4j_connection)
         await _shutdown_component("postgres", pg_manager.close)

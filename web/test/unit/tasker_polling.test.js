@@ -2,8 +2,6 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createPinia, setActivePinia } from 'pinia'
 import { createServer } from 'vite'
-import { readFileSync } from 'node:fs'
-import { compileScript, parse } from 'vue/compiler-sfc'
 
 const deferred = () => {
   let resolve
@@ -33,55 +31,6 @@ test('任务请求时序与轮询生命周期', async (t) => {
     return { store, user }
   }
   try {
-    await t.test('图谱构建和重试的旧提交回执不能进入新会话', async () => {
-      const source = readFileSync(
-        new URL('../../src/components/KnowledgeGraphSection.vue', import.meta.url),
-        'utf8'
-      )
-      const { descriptor } = parse(source)
-      const { scriptSetupAst } = compileScript(descriptor, { id: 'graph-task-test' })
-      for (const [name, apiMethod] of [
-        ['startGraphBuild', 'startIndex'],
-        ['retryGraphVectors', 'reconcile']
-      ]) {
-        const node = scriptSetupAst.find(
-          (node) =>
-            node.type === 'VariableDeclaration' &&
-            node.declarations.some((item) => item.id.name === name)
-        )
-        assert.ok(node, name)
-        const { store, user } = makeStore()
-        const response = deferred()
-        const action = new Function(
-          'taskerStore',
-          'graphBuildApi',
-          'kbId',
-          'message',
-          'GRAPH_BUILD_TASK_TYPE',
-          'loadGraphBuildStatus',
-          'getErrorDetail',
-          descriptor.scriptSetup.content.slice(node.start, node.end) + `; return ${name}`
-        )(
-          store,
-          { [apiMethod]: () => response.promise },
-          { value: 'test-kb' },
-          { success() {}, error: assert.fail },
-          'graph-build',
-          async () => {},
-          (error) => error.message
-        )
-        const pending = action()
-        user.logout()
-        user.token = 'next-session'
-        user.userRole = 'admin'
-        response.resolve({ task_id: 'old-graph-task' })
-        await pending
-        assert.deepEqual(store.tasks, [])
-        await action()
-        assert.equal(store.tasks[0].id, 'old-graph-task')
-        store.reset()
-      }
-    })
     await t.test('旧提交回执不能登记到新会话，新提交仍可登记', () => {
       const { store, user } = makeStore()
       const registerOldTask = store.createTaskRegistration()

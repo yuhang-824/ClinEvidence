@@ -1,6 +1,6 @@
 # 文档导入与查询 API
 
-本页说明如何通过 HTTP 或 CLI 把文档加入知识库，以及如何查询已经处理的内容。它面向管理员和集成开发者；知识库运行机制见[知识库机制](../mechanisms/knowledge-base.md)，导图和图谱见[知识导图与知识图谱](./knowledge-base-graph.md)。
+本页说明如何通过 HTTP 或 CLI 把文档加入知识库，以及如何查询已经处理的内容。它面向管理员和集成开发者；知识库运行机制见[知识库机制](../mechanisms/knowledge-base.md)，导图见[知识导图](./knowledge-base-graph.md)。
 
 ## 权限
 
@@ -68,7 +68,7 @@ Durable Task 的 `success` 只代表 worker 已完成编排。最终结论要检
 
 `files` 的查询参数只匹配文件名，不搜索正文。`open` 默认从第 0 行开始读取，单次最多 1800 行；`find` 返回匹配窗口。
 
-Dify 和 Notion 只提供外部检索能力。它们不支持 Yuxi 的文档上传、解析、索引和全文打开；调用不支持的接口时，服务会明确返回错误。
+ClinEvidence 仅注册本地 Milvus 文档库；Dify 和 Notion 类型不再支持。external 路由服务于本地库的 Agent/CLI 查询。
 
 ## CLI
 
@@ -93,4 +93,4 @@ yuxi kb find --kb-id <kb-id> --file-id <file-id> --pattern "年假"
 - [知识库 HTTP integration](https://github.com/xerrors/Yuxi/blob/main/backend/test/integration/api/test_knowledge_router.py)
 - [外部知识库 integration](https://github.com/xerrors/Yuxi/blob/main/backend/test/integration/api/test_knowledge_external_router.py)
 
-修改导入、权限或查询接口时，运行真实 HTTP integration，并从 PostgreSQL、MinIO、Milvus 或 Neo4j 回读最终结果。
+修改导入、权限或查询接口时，运行真实 HTTP integration，并从 PostgreSQL、MinIO或 Milvus 回读最终结果。

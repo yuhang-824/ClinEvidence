@@ -8,7 +8,7 @@ ClinEvidence 的首次获取和启动请先阅读[本项目 README](https://gith
 
 - 已安装 [Docker Engine](https://docs.docker.com/get-docker/) 和 Docker Compose v2。
 - 一个可用的大模型 API。下面的初始化脚本以 SiliconFlow 为例；也可以先复制 `.env.template`，改用其他受支持的供应商。
-- 能够访问 Docker 镜像仓库和模型服务的网络。默认拓扑会启动知识库和图谱依赖，但 OCR 服务只在需要时通过 `all` profile 启动。
+- 能够访问 Docker 镜像仓库和模型服务的网络。默认拓扑会启动本地文档知识库依赖，但 OCR 服务只在需要时通过 `all` profile 启动。
 
 默认开发拓扑不要求 GPU。MinerU 和 PP-Structure-V3 等本地 OCR 服务需要 GPU，配置方法见[文档处理与 OCR](../advanced/document-processing.md)。
 
@@ -123,11 +123,11 @@ docker compose up --build -d
 
 ### 知识库依赖启动失败
 
-默认拓扑需要 Milvus、etcd、MinIO 和 Neo4j。先查看对应服务的日志和健康状态：
+默认拓扑需要 Milvus、etcd 和 MinIO。先查看对应服务的日志和健康状态：
 
 ```bash
-docker compose ps milvus etcd minio graph
-docker compose logs --tail=100 milvus etcd minio graph
+docker compose ps milvus etcd minio
+docker compose logs --tail=100 milvus etcd minio
 ```
 
 这些服务是默认拓扑的一部分；不要用一个“看起来启动成功”的空结果代替依赖故障排查。
@@ -139,7 +139,7 @@ docker compose logs --tail=100 milvus etcd minio graph
 ## 下一步
 
 - [模型配置](./model-config.md)：接入聊天、嵌入和重排模型。
-- [知识库与知识图谱](./knowledge-base.md)：上传文档并验证检索。
+- [文档知识库](./knowledge-base.md)：上传文档并验证检索。
 - [命令行工具](./cli.md)：用 CLI 管理实例和运行任务。
 - [生产部署](../advanced/deployment.md)：配置生产环境、升级和备份。
 - [机制详解](../mechanisms/index.md)：理解运行、文件和存储边界。

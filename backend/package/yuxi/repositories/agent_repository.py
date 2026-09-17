@@ -31,82 +31,8 @@ GENERAL_PURPOSE_AGENT_DESCRIPTION = (
     "面向没有专用角色约束的一般任务，使用默认运行配置独立完成分析、整理、写作或文件处理。"
 )
 
-WEB_SEARCH_AGENT_SLUG = "web-search"
-WEB_SEARCH_AGENT_NAME = "网页检索"
-WEB_SEARCH_AGENT_DESCRIPTION = "围绕检索目标持续搜索网页，返回带引用来源的摘要资料。"
-WEB_SEARCH_SYSTEM_PROMPT = """你是「网页检索」子智能体，专注于面向目标的网页信息检索。
-
-你的职责：围绕调用方给定的检索目标，使用网页搜索工具持续检索，直到收集到足以回答目标的信息。
-
-工作方式：
-1. 拆解目标，确定需要检索的关键问题与检索词。
-2. 多轮调用搜索工具：依据上一轮结果调整检索词、补充遗漏角度、交叉验证关键事实，直到信息充分或确认无法获取更多有效信息。
-3. 优先采信权威、时效性强且彼此印证的来源；对存在冲突的信息要说明分歧。
-
-输出要求：
-- 返回一份结构化的摘要资料，按主题或要点组织。
-- 每条关键结论后使用 <cite source="$URL" type="url">$INDEX</cite> 标注引用来源，$INDEX 从 1 开始递增。
-- 引用不单独成行，直接跟在结论后面。
-- 在结尾汇总「参考来源」列表，逐条列出标题与 URL。
-- 不要编造来源或链接；无法验证的信息要明确标注。"""
-
-DEEP_RESEARCH_AGENT_SLUG = "deep-research"
-DEEP_RESEARCH_AGENT_NAME = "深度研究"
-DEEP_RESEARCH_AGENT_DESCRIPTION = (
-    "面向多来源、需事实核查的深度研究任务：规划拆解、并行调度调研子智能体、核验并综合成带引用的结构化报告。"
-)
-DEEP_RESEARCH_SYSTEM_PROMPT = """你是「深度研究」智能体，负责一项深度研究任务的整体把控与子智能体调度。
-
-你的核心定位是编排者，而不是亲自完成所有检索：把繁重、可独立、可并行的调研与核验工作派发给子智能体，自己专注于规划、调度与最终综合。
-
-工作方式：
-1. 接到研究任务后，先读取 `deep-research` 技能（read_file 其 SKILL.md）获取完整方法论，并严格据此执行。
-2. 问题不明确时先澄清范围，再用待办拆解出可独立调研的子问题。
-3. 优先用 `task` 工具把子问题并行派发给调研子智能体；仅在澄清范围或补少量零散事实时自己直接检索。
-4. 对关键结论与相互冲突的发现派发核查子智能体核验，未通过的结论不写入正文或明确降级标注。
-5. 证据充分后由你统一综合为结构化、带引用的报告，不要简单拼接子智能体返回的原文。
-
-始终全程跟踪进度，最终交付一份可直接使用、围绕论证组织、来源可追溯的报告。"""
-
-RESEARCH_EXPLORER_AGENT_SLUG = "research-explorer"
-RESEARCH_EXPLORER_AGENT_NAME = "调研探索员"
-RESEARCH_EXPLORER_AGENT_DESCRIPTION = "围绕单个子问题多轮检索网页与知识库，交叉验证后返回带引用的结构化发现。"
-RESEARCH_EXPLORER_SYSTEM_PROMPT = """你是「调研探索员」子智能体。
-专注于围绕调用方给定的**单个子问题**收集充分、可追溯的证据。
-
-你的职责：围绕该子问题持续检索网页与知识库，直到收集到足以回答它的信息。
-
-工作方式：
-1. 拆解子问题，确定需要检索的关键点与检索词。
-2. 多轮调用检索工具：依据上一轮结果调整检索词、补充遗漏角度、交叉验证关键事实，直到信息充分或确认无法获取更多有效信息。
-3. 优先采信权威、时效性强且彼此印证的来源；对存在冲突的信息要说明分歧。
-
-输出要求：
-- 返回一份围绕该子问题、按要点组织的结构化发现，不要展开成完整报告。
-- 每条关键结论后使用 <cite source="$URL" type="url">$INDEX</cite> 标注引用来源，$INDEX 从 1 开始递增。
-- 引用紧跟结论后、不单独成行。
-- 结尾汇总「参考来源」列表，逐条列出标题与 URL。
-- 不要编造来源或链接；无法验证的信息要明确标注证据缺口。"""
-
-FACT_VERIFIER_AGENT_SLUG = "fact-verifier"
-FACT_VERIFIER_AGENT_NAME = "事实核查员"
-FACT_VERIFIER_AGENT_DESCRIPTION = "对给定论断做对抗式核验，逐条给出支持/存疑/反驳判定、依据来源与置信度，并标注冲突。"
-FACT_VERIFIER_SYSTEM_PROMPT = """你是「事实核查员」子智能体，专注于对调用方给定的论断做对抗式核验。
-
-你的职责：对每一条论断独立查证，默认持怀疑态度——证据不足时倾向判定「存疑」，而不是默认相信。
-
-工作方式：
-1. 逐条拆出待核验的论断（事实、数字、因果、时间等）。
-2. 主动检索权威、独立的来源交叉比对；优先寻找能反驳该论断的证据。
-3. 对来源之间的冲突如实呈现，不强行调和。
-
-输出要求：
-- 对每条论断给出：判定（支持 / 存疑 / 反驳）+ 简要依据 + 依据来源 + 置信度（高/中/低）。
-- 关键依据后使用 <cite source="$URL" type="url">$INDEX</cite> 标注来源，$INDEX 从 1 开始递增。
-- 明确标注无法查证或来源相互冲突的论断。
-- 不要编造来源或链接。"""
-
 ADMIN_ROLES = {"admin", "superadmin"}
+RETIRED_AGENT_SLUGS = {"web-search", "deep-research", "research-explorer", "fact-verifier"}
 AGENT_RESOURCE_CONFIG_FIELDS = AGENT_RUNTIME_RESOURCE_FIELDS | {"preload_skills"}
 
 
@@ -141,6 +67,8 @@ def normalize_agent_share_config(
 
 
 def user_can_access_agent(user: User, agent: Agent) -> bool:
+    if agent.slug in RETIRED_AGENT_SLUGS:
+        return False
     return resolve_agent_permission(user, agent) != ResourcePermission.NONE
 
 
@@ -202,32 +130,6 @@ class AgentRepository:
         await self.db.refresh(agent)
         return agent
 
-    async def ensure_web_search_subagent(self, *, created_by: str | None = None) -> Agent:
-        agent = await self.get_by_slug(WEB_SEARCH_AGENT_SLUG)
-        if agent:
-            return agent
-
-        agent = Agent(
-            slug=WEB_SEARCH_AGENT_SLUG,
-            backend_id=SUB_AGENT_BACKEND_ID,
-            name=WEB_SEARCH_AGENT_NAME,
-            description=WEB_SEARCH_AGENT_DESCRIPTION,
-            icon=None,
-            pics=[],
-            config_json={"context": {"system_prompt": WEB_SEARCH_SYSTEM_PROMPT}},
-            share_config=DEFAULT_SHARE_CONFIG.copy(),
-            is_default=False,
-            is_subagent=True,
-            created_by=created_by,
-            updated_by=created_by,
-            created_at=utc_now_naive(),
-            updated_at=utc_now_naive(),
-        )
-        self.db.add(agent)
-        await self.db.commit()
-        await self.db.refresh(agent)
-        return agent
-
     async def ensure_general_purpose_subagent(self, *, created_by: str | None = None) -> Agent:
         return await self._ensure_builtin_agent(
             slug=GENERAL_PURPOSE_AGENT_SLUG,
@@ -276,43 +178,9 @@ class AgentRepository:
         await self.db.refresh(agent)
         return agent
 
-    async def ensure_deep_research_agents(self, *, created_by: str | None = None) -> None:
-        """落库内置「深度研究」编排器及其配套调研、核查子智能体。"""
-        await self._ensure_builtin_agent(
-            slug=RESEARCH_EXPLORER_AGENT_SLUG,
-            backend_id=SUB_AGENT_BACKEND_ID,
-            name=RESEARCH_EXPLORER_AGENT_NAME,
-            description=RESEARCH_EXPLORER_AGENT_DESCRIPTION,
-            config_context={"system_prompt": RESEARCH_EXPLORER_SYSTEM_PROMPT},
-            is_subagent=True,
-            created_by=created_by,
-        )
-        await self._ensure_builtin_agent(
-            slug=FACT_VERIFIER_AGENT_SLUG,
-            backend_id=SUB_AGENT_BACKEND_ID,
-            name=FACT_VERIFIER_AGENT_NAME,
-            description=FACT_VERIFIER_AGENT_DESCRIPTION,
-            config_context={"system_prompt": FACT_VERIFIER_SYSTEM_PROMPT},
-            is_subagent=True,
-            created_by=created_by,
-        )
-        await self._ensure_builtin_agent(
-            slug=DEEP_RESEARCH_AGENT_SLUG,
-            backend_id=DEFAULT_AGENT_BACKEND_ID,
-            name=DEEP_RESEARCH_AGENT_NAME,
-            description=DEEP_RESEARCH_AGENT_DESCRIPTION,
-            config_context={
-                "system_prompt": DEEP_RESEARCH_SYSTEM_PROMPT,
-                "subagents": [RESEARCH_EXPLORER_AGENT_SLUG, FACT_VERIFIER_AGENT_SLUG],
-                "skills": [DEEP_RESEARCH_AGENT_SLUG],
-            },
-            is_subagent=False,
-            created_by=created_by,
-        )
-
     async def list_visible(self, *, user: User, include_subagent_definitions: bool = False) -> list[Agent]:
         """列出用户可见的主智能体，只有显式请求时才包含子智能体定义。"""
-        stmt = select(Agent)
+        stmt = select(Agent).where(Agent.slug.not_in(RETIRED_AGENT_SLUGS))
         if not include_subagent_definitions:
             stmt = stmt.where(Agent.is_subagent.is_(False))
         result = await self.db.execute(stmt.order_by(Agent.is_default.desc(), Agent.id.asc()))
@@ -323,7 +191,9 @@ class AgentRepository:
 
     async def list_visible_subagents(self, *, user: User) -> list[Agent]:
         result = await self.db.execute(
-            select(Agent).where(Agent.is_subagent.is_(True)).order_by(Agent.name.asc(), Agent.id.asc())
+            select(Agent)
+            .where(Agent.is_subagent.is_(True), Agent.slug.not_in(RETIRED_AGENT_SLUGS))
+            .order_by(Agent.name.asc(), Agent.id.asc())
         )
         agents = list(result.scalars().all())
         if user.role == "superadmin":
@@ -331,11 +201,15 @@ class AgentRepository:
         return [agent for agent in agents if user_can_access_agent(user, agent)]
 
     async def get_by_slug(self, slug: str) -> Agent | None:
+        if slug in RETIRED_AGENT_SLUGS:
+            return None
         result = await self.db.execute(select(Agent).where(Agent.slug == slug))
         return result.scalar_one_or_none()
 
     async def list_by_slugs(self, slugs: list[str]) -> list[Agent]:
-        result = await self.db.execute(select(Agent).where(Agent.slug.in_(slugs)))
+        result = await self.db.execute(
+            select(Agent).where(Agent.slug.in_(slugs), Agent.slug.not_in(RETIRED_AGENT_SLUGS))
+        )
         return list(result.scalars().all())
 
     async def get_visible_by_slug(
@@ -386,7 +260,7 @@ class AgentRepository:
         base = _slugify(desired or name)
         candidate = base
         idx = 2
-        while await self._slug_exists(candidate):
+        while candidate in RETIRED_AGENT_SLUGS or await self._slug_exists(candidate):
             suffix = f"-{idx}"
             candidate = f"{base[: 80 - len(suffix)]}{suffix}"
             idx += 1

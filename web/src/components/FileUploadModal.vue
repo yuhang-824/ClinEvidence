@@ -38,13 +38,11 @@
       <!-- 2. 配置面板 -->
       <div
         class="settings-panel"
-        v-if="folderTreeData.length > 0 || uploadMode !== 'url' || autoIndex"
       >
         <!-- 第一行：存储位置 + OCR 引擎 -->
         <div
           class="setting-row"
-          v-if="folderTreeData.length > 0 || uploadMode !== 'url'"
-          :class="{ 'two-cols': uploadMode !== 'url' && folderTreeData.length > 0 }"
+            :class="{ 'two-cols': folderTreeData.length > 0 }"
         >
           <div class="col-item" v-if="folderTreeData.length > 0">
             <div class="setting-label">存储位置</div>
@@ -64,7 +62,7 @@
             </div>
             <p class="param-description">选择文件保存的目标文件夹</p>
           </div>
-          <div class="col-item" v-if="uploadMode !== 'url'">
+          <div class="col-item">
             <div class="setting-label">OCR 引擎（仅应用于 PDF/图片文件）</div>
             <div class="setting-content">
               <OCRSelector
@@ -191,59 +189,6 @@
         />
       </div>
 
-      <!-- URL 输入区域 -->
-      <div class="url-area" v-if="uploadMode === 'url'">
-        <div class="url-input-wrapper">
-          <a-textarea
-            v-model:value="newUrl"
-            placeholder="输入 URL，一行一个&#10;https://site1.com&#10;https://site2.com"
-            :auto-size="{ minRows: 4, maxRows: 8 }"
-            class="url-input"
-            @keydown.enter.ctrl="handleFetchUrls"
-          />
-          <div class="url-actions">
-            <span class="url-hint">
-              支持批量粘贴，自动过滤空行。
-              <span class="warning-text">需配置白名单，详见文档说明</span>
-            </span>
-            <a-button
-              type="primary"
-              @click="handleFetchUrls"
-              class="add-url-btn"
-              :loading="fetchingUrls"
-              :disabled="!newUrl.trim()"
-            >
-              加载 URLs
-            </a-button>
-          </div>
-        </div>
-        <div class="url-list" v-if="urlList.length > 0">
-          <div v-for="(item, index) in urlList" :key="index" class="url-item">
-            <div class="url-icon-wrapper">
-              <Link v-if="item.status === 'success'" :size="14" class="url-icon success" />
-              <Info
-                v-else-if="item.status === 'error'"
-                :size="14"
-                class="url-icon error"
-                :title="item.error"
-              />
-              <RotateCw v-else :size="14" class="url-icon spinning" />
-            </div>
-            <div class="url-content">
-              <span class="url-text" :title="item.url">{{ item.url }}</span>
-              <span v-if="item.status === 'error'" class="url-error-msg">{{ item.error }}</span>
-            </div>
-            <a-button type="text" size="small" class="remove-url-btn" @click="removeUrl(index)">
-              <X :size="14" />
-            </a-button>
-          </div>
-        </div>
-        <div class="url-empty-tip" v-else>
-          <Info :size="16" />
-          <span>输入 URL 后点击加载，系统将自动抓取网页内容</span>
-        </div>
-      </div>
-
       <!-- 同名文件提示 -->
       <div v-if="sameNameFiles.length > 0" class="conflict-files-panel">
         <div class="panel-header">
@@ -293,13 +238,10 @@ import {
   FileUp,
   FolderUp,
   FolderOpen,
-  RotateCw,
   CircleHelp,
   Info,
   Download,
   Trash2,
-  Link,
-  X,
   ChevronDown,
   ChevronUp
 } from '@lucide/vue'
@@ -548,9 +490,6 @@ const failedDetailItems = computed(() => {
 })
 
 const canSubmit = computed(() => {
-  if (uploadMode.value === 'url') {
-    return urlList.value.some((item) => item.status === 'success')
-  }
   if (uploadMode.value === 'workspace') {
     return selectedWorkspacePaths.value.length > 0 && !workspaceLoading.value
   }
@@ -573,13 +512,6 @@ const uploadModeOptions = computed(() => [
     ])
   },
   {
-    value: 'url',
-    label: h('div', { class: 'segmented-option' }, [
-      h(Link, { size: 16, class: 'option-icon' }),
-      h('span', { class: 'option-text' }, '解析 URL')
-    ])
-  },
-  {
     value: 'workspace',
     label: h('div', { class: 'segmented-option' }, [
       h(FolderOpen, { size: 16, class: 'option-icon' }),
@@ -593,8 +525,6 @@ watch(uploadMode, (val) => {
   // 切换模式时清空已选内容，避免混淆
   fileList.value = []
   sameNameFiles.value = []
-  urlList.value = []
-  newUrl.value = ''
   selectedWorkspacePaths.value = []
   for (const task of uploadQueue.value) {
     task.canceled = true
@@ -625,25 +555,9 @@ watch(fileList, (newFileList) => {
   uploadTaskProgress.value = nextProgress
 })
 
-// URL 列表
-// Item structure: { url: string, status: 'fetching'|'success'|'error', data: object|null, error: string }
-const urlList = ref([])
-const newUrl = ref('')
-const fetchingUrls = ref(false)
-const CONTENT_EXISTS_ERROR_TEXT = '内容已存在于知识库中'
 
 // 同名文件列表（用于显示提示）
 const sameNameFiles = ref([])
-
-// URL 相关功能
-const isValidUrl = (string) => {
-  try {
-    const url = new URL(string)
-    return url.protocol === 'http:' || url.protocol === 'https:'
-  } catch {
-    return false
-  }
-}
 
 const mergeSameNameFiles = (sameNameList = []) => {
   if (!Array.isArray(sameNameList) || sameNameList.length === 0) {
@@ -652,70 +566,6 @@ const mergeSameNameFiles = (sameNameList = []) => {
   const existingIds = new Set(sameNameFiles.value.map((f) => f.file_id))
   const newConflicts = sameNameList.filter((f) => !existingIds.has(f.file_id))
   sameNameFiles.value.push(...newConflicts)
-}
-
-const fetchSingleUrlItem = async (item) => {
-  item.status = 'fetching'
-  try {
-    const res = await fileApi.fetchUrl(item.url, kbId.value)
-    item.status = 'success'
-    item.data = res
-    mergeSameNameFiles(res.same_name_files)
-  } catch (error) {
-    console.error('Failed to fetch URL:', error)
-    item.status = 'error'
-
-    const detailData = error.response?.data?.detail
-    const detailMessage =
-      (typeof detailData === 'string' ? detailData : detailData?.message) || error.message || ''
-    if (detailMessage.includes('same content') || detailMessage.includes('相同内容')) {
-      item.error = CONTENT_EXISTS_ERROR_TEXT
-      mergeSameNameFiles(detailData?.same_name_files)
-    } else {
-      item.error = detailMessage || '加载失败'
-    }
-  }
-}
-
-const handleFetchUrls = async () => {
-  const text = newUrl.value
-  if (!text) return
-
-  const lines = text
-    .split(/[\r\n]+/)
-    .map((l) => l.trim())
-    .filter((l) => l)
-  if (lines.length === 0) return
-
-  // 1. 预处理：添加到列表
-  const newItems = []
-  for (const url of lines) {
-    if (!isValidUrl(url)) {
-      continue
-    }
-    if (urlList.value.some((u) => u.url === url)) continue
-
-    const item = { url, status: 'pending', data: null, error: '' }
-    urlList.value.push(item)
-    newItems.push(item)
-  }
-
-  if (newItems.length === 0) {
-    if (lines.length > 0) {
-      message.warning('没有检测到有效的新 URL')
-    }
-    return
-  }
-
-  newUrl.value = '' // 清空输入框
-  fetchingUrls.value = true
-
-  await Promise.all(newItems.map(fetchSingleUrlItem))
-  fetchingUrls.value = false
-}
-
-const removeUrl = (index) => {
-  urlList.value.splice(index, 1)
 }
 
 // 个人空间文件选择
@@ -1148,7 +998,7 @@ const chunkData = async () => {
     return
   }
 
-  // 验证OCR服务可用性（非 URL 模式下）
+  // 验证OCR服务可用性
   if (uploadMode.value !== 'url' && !validateOcrService()) {
     return
   }
@@ -1209,85 +1059,6 @@ const chunkData = async () => {
     } catch (error) {
       console.error('个人空间文件导入失败:', error)
       message.error('个人空间文件导入失败: ' + (error.message || '未知错误'))
-    } finally {
-      store.state.chunkLoading = false
-    }
-    return
-  }
-
-  // URL 模式处理
-  if (uploadMode.value === 'url') {
-    // 过滤出成功的项
-    const successfulItems = urlList.value.filter((item) => item.status === 'success' && item.data)
-    if (successfulItems.length === 0) {
-      message.error('请添加并等待至少一个 URL 解析成功')
-      return
-    }
-
-    // 批内按内容哈希去重，避免同一批次重复入库
-    const deduplicatedItems = []
-    const seenKeys = new Set()
-    let skippedDuplicates = 0
-    for (const item of successfulItems) {
-      const dedupKey = item.data?.content_hash || item.data?.file_path || item.url
-      if (seenKeys.has(dedupKey)) {
-        skippedDuplicates += 1
-        continue
-      }
-      seenKeys.add(dedupKey)
-      deduplicatedItems.push(item)
-    }
-
-    if (deduplicatedItems.length === 0) {
-      message.error('URL 内容均为重复项，请更换后重试')
-      return
-    }
-
-    if (skippedDuplicates > 0) {
-      message.warning(`检测到 ${skippedDuplicates} 个重复 URL 内容，已保留首个并跳过其余项`)
-    }
-
-    try {
-      store.state.chunkLoading = true
-      const params = { ...processingParams.value }
-      if (autoIndex.value) {
-        params.auto_index = true
-        Object.assign(params, buildAutoIndexParams())
-      }
-
-      // 构造 _preprocessed_map 和 items (minio urls)
-      const items = []
-      const preprocessedMap = {}
-      for (const item of deduplicatedItems) {
-        // item.data = { file_path: "http://minio...", content_hash: "...", filename: "...", ... }
-        // 注意：fetch-url 返回的 file_path 其实是 MinIO URL
-        // 我们需要传递 MinIO URL 给 addDocuments
-        const minioUrl = item.data.file_path
-        items.push(minioUrl)
-        preprocessedMap[minioUrl] = {
-          path: minioUrl,
-          content_hash: item.data.content_hash,
-          filename: item.data.filename,
-          file_size: item.data.size
-        }
-      }
-      params._preprocessed_map = preprocessedMap
-
-      // 调用 addFiles (file mode)
-      await store.addFiles({
-        items: items,
-        contentType: 'file', // 重要：这里改为 file，因为我们已经转成了 minio 上的文件
-        params,
-        parentId: selectedFolderId.value
-      })
-
-      emit('success')
-      handleCancel()
-      urlList.value = []
-      newUrl.value = ''
-    } catch (error) {
-      console.error('URL 提交失败:', error)
-      message.error('URL 提交失败: ' + (error.message || '未知错误'))
     } finally {
       store.state.chunkLoading = false
     }
@@ -1808,135 +1579,6 @@ const chunkData = async () => {
 .workspace-import-summary {
   font-size: 12px;
   color: var(--color-text-secondary);
-}
-
-/* URL Area */
-.url-area {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.url-input-wrapper {
-  width: 100%;
-}
-
-.url-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 12px;
-  margin-top: 8px;
-}
-
-.url-hint {
-  font-size: 12px;
-  color: var(--gray-500);
-
-  .warning-text {
-    color: var(--color-warning-500);
-    margin-left: 4px;
-  }
-}
-
-.url-input {
-  width: 100%;
-  padding: 10px;
-}
-
-.add-url-btn {
-  margin-left: 8px;
-}
-
-.url-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: 300px;
-  overflow-y: auto;
-}
-
-.url-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: var(--gray-50);
-  border: 1px solid var(--gray-200);
-  border-radius: 6px;
-  transition: all 0.2s;
-
-  &:hover {
-    background: var(--gray-100);
-    border-color: var(--main-300);
-  }
-}
-
-.url-icon-wrapper {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-}
-
-.url-icon {
-  color: var(--main-500);
-
-  &.success {
-    color: var(--color-success-500);
-  }
-
-  &.error {
-    color: var(--color-error-500);
-    cursor: help;
-  }
-
-  &.spinning {
-    animation: spin 1s linear infinite;
-    color: var(--main-500);
-  }
-}
-
-.url-content {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.url-text {
-  font-size: 13px;
-  color: var(--gray-700);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.url-error-msg {
-  font-size: 11px;
-  color: var(--color-error-500);
-  margin-top: 2px;
-}
-
-.remove-url-btn {
-  color: var(--gray-400);
-  flex-shrink: 0;
-
-  &:hover {
-    color: var(--color-error-500);
-  }
-}
-
-.url-empty-tip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 16px;
-  background: var(--gray-50);
-  border: 1px dashed var(--gray-300);
-  border-radius: 8px;
-  color: var(--gray-500);
-  font-size: 13px;
 }
 
 /* Conflict Files Panel */

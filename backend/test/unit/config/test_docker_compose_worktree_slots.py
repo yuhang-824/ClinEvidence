@@ -112,7 +112,7 @@ def test_development_compose_is_parameterized_for_parallel_worktree_slots() -> N
     assert f"{STATE_ROOT}/postgresql" in state_sources
     assert f"{STATE_ROOT}/redis" in state_sources
     assert f"{STATE_ROOT}/milvus/milvus" in state_sources
-    assert f"{STATE_ROOT}/neo4j/data" in state_sources
+    assert f"{STATE_ROOT}/neo4j/data" not in state_sources
     assert f"{STATE_ROOT}/yuxi/threads" in state_sources
 
 

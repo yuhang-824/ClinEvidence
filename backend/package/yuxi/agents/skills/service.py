@@ -24,7 +24,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.agents.mcp.service import get_enabled_mcp_server_slugs
-from yuxi.agents.skills.repository import SkillRepository
+from yuxi.agents.skills.repository import RETIRED_BUILTIN_SKILLS, SkillRepository, active_skill_clause
 from yuxi.config import (
     get_runtime_dir,
     get_skill_data_dir,
@@ -206,6 +206,8 @@ def normalize_skill_share_config(
 
 
 def user_can_access_skill(user: User, skill: Skill, *, require_enabled: bool = True) -> bool:
+    if is_builtin_skill(skill) and skill.slug in RETIRED_BUILTIN_SKILLS:
+        return False
     if require_enabled and not skill.enabled:
         return False
     return resolve_skill_permission(user, skill) != ResourcePermission.NONE
@@ -655,7 +657,9 @@ async def list_skill_slugs(db: AsyncSession, *, user: User | None = None) -> lis
     if user is not None:
         return await _list_shared_skill_slugs(db, user)
     result = await db.execute(
-        select(Skill.slug).where(Skill.enabled.is_(True)).order_by(Skill.updated_at.desc(), Skill.id.desc())
+        select(Skill.slug)
+        .where(Skill.enabled.is_(True), active_skill_clause())
+        .order_by(Skill.updated_at.desc(), Skill.id.desc())
     )
     return [slug for slug in result.scalars().all() if isinstance(slug, str)]
 

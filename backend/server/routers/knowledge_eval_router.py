@@ -35,8 +35,7 @@ class GenerateDatasetRequest(BaseModel):
         le=MAX_BENCHMARK_GENERATION_CONCURRENCY,
     )
     llm_model_spec: str = Field(..., min_length=1)
-    generation_mode: Literal["vector", "graph_enhanced"] = "vector"
-    graph_expand_top_k: int = Field(default=1, ge=1, le=3)
+    generation_mode: Literal["vector"] = "vector"
 
 
 class RunEvaluationRequest(BaseModel):
@@ -217,7 +216,6 @@ async def generate_evaluation_dataset(
             concurrency_count=request.concurrency_count,
             llm_model_spec=request.llm_model_spec,
             generation_mode=request.generation_mode,
-            graph_expand_top_k=request.graph_expand_top_k,
             created_by=current_user.uid,
         )
         return {"message": "success", "data": result}

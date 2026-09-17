@@ -12,11 +12,6 @@ from yuxi.utils import logger
 
 DEFAULT_BENCHMARK_GENERATION_CONCURRENCY = 10
 MAX_BENCHMARK_GENERATION_CONCURRENCY = 20
-DEFAULT_GRAPH_EXPAND_TOP_K = 1
-MAX_GRAPH_EXPAND_TOP_K = 3
-GRAPH_SEED_DECAY = 0.9
-GRAPH_PPR_DAMPING = 0.85
-GRAPH_PPR_MAX_NODES = 10000
 
 _WORKER_DONE = object()
 
@@ -47,16 +42,6 @@ def normalize_generation_concurrency_count(value: Any) -> int:
     if value in (None, ""):
         return DEFAULT_BENCHMARK_GENERATION_CONCURRENCY
     return min(max(1, int(value)), MAX_BENCHMARK_GENERATION_CONCURRENCY)
-
-
-def normalize_graph_expand_top_k(value: Any) -> int:
-    if value in (None, ""):
-        return DEFAULT_GRAPH_EXPAND_TOP_K
-    return min(max(1, int(value)), MAX_GRAPH_EXPAND_TOP_K)
-
-
-def _chunk_entity_ids(chunk: dict[str, Any]) -> list[str]:
-    return [str(entity_id) for entity_id in chunk.get("ent_ids") or [] if entity_id]
 
 
 def _is_anchor_chunk(candidate: dict[str, Any], anchor_chunk: dict[str, Any]) -> bool:
@@ -114,69 +99,6 @@ async def select_neighbor_chunks_by_kb_query(
     return chunks
 
 
-async def select_graph_enhanced_chunks(
-    *,
-    kb_id: str,
-    anchor_chunk: dict[str, Any],
-    chunks_by_id: dict[str, dict[str, Any]],
-    context_count: int,
-    graph_expand_top_k: int,
-) -> list[dict[str, Any]] | None:
-    if context_count <= 1:
-        return [anchor_chunk]
-
-    from yuxi.knowledge.graphs.milvus_graph_service import MilvusGraphService
-
-    anchor_entity_ids = _chunk_entity_ids(anchor_chunk)
-    if not anchor_entity_ids:
-        return None
-
-    graph_service = MilvusGraphService()
-    selected = [anchor_chunk]
-    selected_ids = {str(anchor_chunk.get("id"))}
-    seed_weights = {entity_id: 1.0 for entity_id in anchor_entity_ids}
-    round_index = 1
-
-    while len(selected) < context_count:
-        for entity_id in anchor_entity_ids:
-            seed_weights[entity_id] = 1.0
-
-        ranked_chunks = await graph_service.query_and_rank_chunks_by_ppr(
-            kb_id,
-            seed_weights,
-            max_nodes=GRAPH_PPR_MAX_NODES,
-            top_k=max(context_count * 5, 20),
-            damping=GRAPH_PPR_DAMPING,
-        )
-        if not ranked_chunks:
-            return None
-
-        new_chunks = []
-        for chunk_id, _ in ranked_chunks:
-            chunk_id = str(chunk_id)
-            if chunk_id in selected_ids:
-                continue
-            chunk = chunks_by_id.get(chunk_id)
-            if chunk is None:
-                continue
-            new_chunks.append(chunk)
-            if len(new_chunks) >= min(graph_expand_top_k, context_count - len(selected)):
-                break
-
-        if not new_chunks:
-            return None
-
-        new_weight = GRAPH_SEED_DECAY**round_index
-        for chunk in new_chunks:
-            selected.append(chunk)
-            selected_ids.add(str(chunk.get("id")))
-            for entity_id in _chunk_entity_ids(chunk):
-                seed_weights[entity_id] = max(seed_weights.get(entity_id, 0.0), new_weight)
-        round_index += 1
-
-    return selected
-
-
 def build_benchmark_generation_prompt(ctx_items: list[tuple[str, str]]) -> str:
     context_text = "\n\n".join([f"片段ID={cid}\n{content}" for cid, content in ctx_items])
     return (
@@ -194,33 +116,14 @@ async def _generate_benchmark_item_once(
     llm: Any,
     context_count: int,
     generation_mode: str,
-    graph_expand_top_k: int,
-    chunks_by_id: dict[str, dict[str, Any]],
 ) -> dict[str, Any] | None:
-    if generation_mode == "graph_enhanced":
-        graph_anchor_chunks = [
-            chunk for chunk in all_chunks if chunk.get("graph_indexed") is True and _chunk_entity_ids(chunk)
-        ]
-        if not graph_anchor_chunks:
-            raise ValueError("No graph indexed chunks with entities found in knowledge base")
-        anchor_chunk = graph_anchor_chunks[random.randrange(len(graph_anchor_chunks))]
-        ctx_chunks = await select_graph_enhanced_chunks(
-            kb_id=kb_id,
-            anchor_chunk=anchor_chunk,
-            chunks_by_id=chunks_by_id,
-            context_count=context_count,
-            graph_expand_top_k=graph_expand_top_k,
-        )
-        if ctx_chunks is None:
-            return None
-    else:
-        anchor_chunk = all_chunks[random.randrange(len(all_chunks))]
-        neighbor_chunks = await select_neighbor_chunks_by_kb_query(
-            kb_id=kb_id,
-            anchor_chunk=anchor_chunk,
-            neighbors_count=context_count - 1,
-        )
-        ctx_chunks = [anchor_chunk] + neighbor_chunks
+    anchor_chunk = all_chunks[random.randrange(len(all_chunks))]
+    neighbor_chunks = await select_neighbor_chunks_by_kb_query(
+        kb_id=kb_id,
+        anchor_chunk=anchor_chunk,
+        neighbors_count=context_count - 1,
+    )
+    ctx_chunks = [anchor_chunk] + neighbor_chunks
     ctx_items = [(chunk["id"], chunk["content"]) for chunk in ctx_chunks]
     allowed_ids = {cid for cid, _ in ctx_items}
 
@@ -253,7 +156,6 @@ async def iter_generated_benchmark_items(
     llm_model_spec: str | None,
     concurrency_count: int = DEFAULT_BENCHMARK_GENERATION_CONCURRENCY,
     generation_mode: str = "vector",
-    graph_expand_top_k: int = DEFAULT_GRAPH_EXPAND_TOP_K,
     progress_base: int = 0,
     total_progress: int | None = None,
     progress_cb: Callable[[int, str], Any] | None = None,
@@ -265,11 +167,9 @@ async def iter_generated_benchmark_items(
     all_chunks = await collect_kb_chunks(kb_id)
     if not all_chunks:
         raise ValueError("No chunks found in knowledge base")
-    chunks_by_id = {str(chunk["id"]): chunk for chunk in all_chunks if chunk.get("id") is not None}
 
-    if generation_mode not in {"vector", "graph_enhanced"}:
+    if generation_mode not in {"vector"}:
         raise ValueError("Unsupported benchmark generation mode")
-    graph_expand_top_k = normalize_graph_expand_top_k(graph_expand_top_k)
 
     if progress_cb:
         await progress_cb(15, "准备生成样本")
@@ -310,8 +210,6 @@ async def iter_generated_benchmark_items(
                         llm=llm,
                         context_count=context_count,
                         generation_mode=generation_mode,
-                        graph_expand_top_k=graph_expand_top_k,
-                        chunks_by_id=chunks_by_id,
                     )
                     progress = None
                     message = None

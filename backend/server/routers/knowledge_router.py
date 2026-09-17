@@ -13,7 +13,6 @@ from starlette.responses import StreamingResponse
 from yuxi.config.options import system_options
 from yuxi.knowledge.base import KBNameConflictError, KBNotFoundError
 from yuxi.knowledge.chunking.ragflow_like.presets import get_chunk_preset_options
-from yuxi.knowledge.graphs.milvus_graph_service import GRAPH_TASK_TYPE, MilvusGraphService
 from yuxi.knowledge.read_models import KnowledgeBaseDetail
 from yuxi.knowledge.parser.capabilities import SUPPORTED_FILE_EXTENSIONS, is_supported_file_extension
 from yuxi.knowledge.runtime import knowledge_base
@@ -31,7 +30,6 @@ from yuxi.knowledge.utils.sample_question_utils import (
     generate_database_sample_questions,
     get_database_sample_questions,
 )
-from yuxi.knowledge.utils.url_fetcher import fetch_url_content
 from yuxi.permissions import (
     ResourcePermission,
     resolve_knowledge_base_permission,
@@ -56,7 +54,6 @@ from server.utils.knowledge_permissions import (
 
 knowledge = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
-ACTIVE_GRAPH_BUILD_STATUSES = {"pending", "running"}
 MAX_DIRECT_DOCUMENT_ACTION_FILE_IDS = 1000
 PENDING_PARSE_STATUSES = ["uploaded"]
 PENDING_INDEX_STATUSES = ["parsed", "error_indexing"]
@@ -206,17 +203,6 @@ def _validate_uploaded_document_items(items: list[str], params: dict) -> None:
         has_preprocessed_hash = isinstance(preprocessed, dict) and bool(preprocessed.get("content_hash"))
         if not has_content_hash and not has_preprocessed_hash:
             raise HTTPException(status_code=400, detail=f"Missing content_hash for file: {item}")
-
-
-async def _has_running_graph_build_task(kb_id: str) -> bool:
-    return (
-        await tasker.find_task_by_payload(
-            task_type=GRAPH_TASK_TYPE,
-            payload_match={"kb_id": kb_id},
-            statuses=ACTIVE_GRAPH_BUILD_STATUSES,
-        )
-        is not None
-    )
 
 
 # =============================================================================
@@ -461,162 +447,6 @@ async def delete_database(kb_id: str, current_user: User = Depends(require_knowl
         raise HTTPException(status_code=400, detail=f"删除数据库失败: {e}")
 
 
-@knowledge.get("/databases/{kb_id}/graph-build/status")
-async def get_graph_build_status(kb_id: str, current_user: User = Depends(require_knowledge_base_read)):
-    try:
-        return await MilvusGraphService().get_status(kb_id, tasker=tasker)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"获取图谱构建状态失败 {e}, {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"获取图谱构建状态失败: {e}")
-
-
-@knowledge.post("/databases/{kb_id}/graph-build/config")
-async def configure_graph_build(
-    kb_id: str,
-    data: dict = Body(...),
-    current_user: User = Depends(require_knowledge_base_manage),
-):
-    try:
-        config = await MilvusGraphService().configure(
-            kb_id,
-            extractor_type=data.get("extractor_type"),
-            extractor_options=data.get("extractor_options") or {},
-            created_by=current_user.uid,
-        )
-        return {"message": "图谱抽取配置已锁定", "status": "success", "config": config}
-    except ValueError as e:
-        status_code = 409 if "已锁定" in str(e) else 400
-        raise HTTPException(status_code=status_code, detail=str(e))
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"配置图谱构建失败 {e}, {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"配置图谱构建失败: {e}")
-
-
-@knowledge.post("/databases/{kb_id}/graph-build/index")
-async def index_graph_build(
-    kb_id: str,
-    current_user: User = Depends(require_knowledge_base_manage),
-):
-    try:
-        if await _has_running_graph_build_task(kb_id):
-            raise HTTPException(status_code=409, detail="该知识库已有正在运行的图谱构建任务")
-
-        database = await knowledge_base.get_database_info(kb_id)
-        if not database:
-            raise HTTPException(status_code=404, detail=f"知识库 {kb_id} 不存在")
-
-        service = MilvusGraphService()
-        graph_status = await service.get_status(kb_id)
-        if not graph_status.get("locked"):
-            raise HTTPException(status_code=400, detail="请先确认并锁定图谱抽取配置")
-
-        task, created = await tasker.enqueue_unique_by_payload(
-            name=f"图谱构建 ({database.name})",
-            task_type=GRAPH_TASK_TYPE,
-            payload={"kb_id": kb_id, "action": "build"},
-            payload_match={"kb_id": kb_id},
-        )
-        if not created:
-            raise HTTPException(status_code=409, detail="该知识库已有正在运行的图谱构建任务")
-        return {"message": "图谱构建任务已提交", "status": "queued", "task_id": task.id}
-    except HTTPException:
-        raise
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"提交图谱构建任务失败 {e}, {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"提交图谱构建任务失败: {e}")
-
-
-@knowledge.get("/databases/{kb_id}/graph-build/failed-chunks")
-async def get_graph_build_failed_chunks(
-    kb_id: str,
-    limit: int = 10,
-    current_user: User = Depends(require_knowledge_base_read),
-):
-    try:
-        return await MilvusGraphService().get_failed_chunk_samples(kb_id, limit=max(1, min(limit, 10)))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"获取图谱抽取失败 Chunk 样例失败 {e}, {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"获取图谱抽取失败 Chunk 样例失败: {e}")
-
-
-@knowledge.post("/databases/{kb_id}/graph-build/reset")
-async def reset_graph_build(
-    kb_id: str,
-    data: dict | None = Body(default=None),
-    current_user: User = Depends(require_knowledge_base_manage),
-):
-    data = data or {}
-    try:
-        if await _has_running_graph_build_task(kb_id):
-            raise HTTPException(status_code=409, detail="该知识库存在正在运行的图谱构建任务，无法重置")
-
-        return await MilvusGraphService().reset(
-            kb_id,
-            clear_extraction_result=bool(data.get("clear_extraction_result", True)),
-            clear_config=bool(data.get("clear_config", False)),
-        )
-    except HTTPException:
-        raise
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"重置图谱构建状态失败 {e}, {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"重置图谱构建状态失败: {e}")
-
-
-@knowledge.post("/databases/{kb_id}/graph-build/reconcile")
-async def reconcile_graph_build(
-    kb_id: str,
-    data: dict | None = Body(default=None),
-    current_user: User = Depends(require_knowledge_base_manage),
-):
-    data = data or {}
-    mode = data.get("mode") or "failed"
-    if mode not in {"failed", "all_vectors"}:
-        raise HTTPException(status_code=400, detail="mode 必须是 failed 或 all_vectors")
-    try:
-        if await _has_running_graph_build_task(kb_id):
-            raise HTTPException(status_code=409, detail="该知识库已有正在运行的图谱构建任务")
-
-        database = await knowledge_base.get_database_info(kb_id)
-        if not database:
-            raise HTTPException(status_code=404, detail=f"知识库 {kb_id} 不存在")
-
-        task, created = await tasker.enqueue_unique_by_payload(
-            name=f"图谱向量索引修复 ({database.name})",
-            task_type=GRAPH_TASK_TYPE,
-            payload={"kb_id": kb_id, "action": "reconcile", "reconcile_mode": mode},
-            payload_match={"kb_id": kb_id},
-        )
-        if not created:
-            raise HTTPException(status_code=409, detail="该知识库已有正在运行的图谱构建任务")
-        return {
-            "message": "图谱向量索引修复任务已提交",
-            "status": "queued",
-            "task_id": task.id,
-            "mode": mode,
-        }
-    except HTTPException:
-        raise
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"提交图谱向量索引修复任务失败 {e}, {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"提交图谱向量索引修复任务失败: {e}")
-
-
 @knowledge.get("/databases/{kb_id}/export")
 async def export_database(
     kb_id: str,
@@ -736,7 +566,7 @@ async def add_documents(
     params = _ensure_document_params(params)
     content_type = params.get("content_type", "file")
     if content_type == "url":
-        raise HTTPException(status_code=400, detail="URL 处理方式已变更，请使用 fetch-url 接口先获取内容")
+        raise HTTPException(status_code=400, detail="仅支持上传本地文档")
     if content_type != "file":
         raise HTTPException(status_code=400, detail=f"Unsupported content_type: {content_type}")
 
@@ -780,7 +610,7 @@ async def add_uploaded_documents(
     params = _ensure_document_params(payload.params)
     content_type = params.get("content_type", "file")
     if content_type == "url":
-        raise HTTPException(status_code=400, detail="URL 处理方式已变更，请使用 fetch-url 接口先获取内容")
+        raise HTTPException(status_code=400, detail="仅支持上传本地文档")
     if content_type != "file":
         raise HTTPException(status_code=400, detail=f"Unsupported content_type: {content_type}")
 
@@ -1511,75 +1341,6 @@ async def move_document(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@knowledge.post("/files/fetch-url")
-async def fetch_url(
-    url: str = Body(..., embed=True),
-    kb_id: str | None = Body(None, embed=True),
-    current_user: User = Depends(get_admin_user),
-):
-    """
-    抓取 URL 内容并上传到 MinIO
-    """
-    logger.debug(f"Fetching URL: {url} for kb_id: {kb_id}")
-    try:
-        await _require_manage_permission_if_kb_id(kb_id, current_user)
-        # 1. 下载内容 (包含白名单校验、大小限制、类型检查)
-        content_bytes, final_url = await fetch_url_content(url)
-
-        # 2. 计算 Hash
-        content_hash = await calculate_content_hash(content_bytes)
-
-        # 检查是否已存在相同内容的文件
-        if kb_id:
-            file_exists = await knowledge_base.file_existed_in_db(kb_id, content_hash)
-            if file_exists:
-                raise HTTPException(
-                    status_code=409,
-                    detail="数据库中已经存在了相同内容文件",
-                )
-
-        # 3. 上传到 MinIO
-        minio_client = get_minio_client()
-        bucket_name = MinIOClient.KB_BUCKETS["documents"]
-        await asyncio.to_thread(minio_client.ensure_bucket_exists, bucket_name)
-
-        folder = kb_id if kb_id else "unknown"
-        object_name = f"{folder}/upload/{content_hash}.html"
-
-        upload_result = await minio_client.aupload_file(
-            bucket_name=bucket_name,
-            object_name=object_name,
-            data=content_bytes,
-            content_type="text/html",
-        )
-
-        # 检测同名文件（URL即为文件名）
-        same_name_files = []
-        has_same_name = False
-        if kb_id:
-            same_name_files = await knowledge_base.get_same_name_files(kb_id, url)
-            has_same_name = len(same_name_files) > 0
-
-        return {
-            "status": "success",
-            "file_path": upload_result.url,
-            "minio_url": upload_result.url,
-            "content_hash": content_hash,
-            "filename": url,  # 原始 URL 作为文件名
-            "final_url": final_url,
-            "size": len(content_bytes),
-            "has_same_name": has_same_name,
-            "same_name_files": same_name_files,
-        }
-
-    except HTTPException:
-        raise
-    except ValueError as e:
-        logger.warning(f"URL fetch validation failed: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Failed to fetch URL {url}: {e}, {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch URL: {str(e)}")
 
 
 @knowledge.post("/files/import-workspace")

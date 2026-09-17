@@ -123,29 +123,6 @@
               />
             </a-form-item>
           </a-col>
-          <a-col v-if="formState.generation_mode === 'graph_enhanced'" :span="12">
-            <a-form-item
-              name="graph_expand_top_k"
-              :labelCol="{ span: 24 }"
-              :wrapperCol="{ span: 24 }"
-            >
-              <template #label>
-                <span class="field-label-with-help">
-                  每轮扩展 Chunk 数
-                  <a-tooltip title="PPR 扩散后每轮加入的最高分 Chunk 数">
-                    <CircleHelp class="help-icon" />
-                  </a-tooltip>
-                </span>
-              </template>
-              <a-input-number
-                v-model:value="formState.graph_expand_top_k"
-                :min="1"
-                :max="3"
-                style="width: 100%"
-                placeholder="默认 1"
-              />
-            </a-form-item>
-          </a-col>
         </a-row>
       </a-form-item>
     </a-form>
@@ -181,8 +158,8 @@
 <script setup>
 import { ref, reactive, computed, watch } from 'vue'
 import { message } from 'ant-design-vue'
-import { CircleHelp, Database, Network } from '@lucide/vue'
-import { evaluationApi, graphBuildApi } from '@/apis/knowledge_api'
+import { CircleHelp, Database } from '@lucide/vue'
+import { evaluationApi } from '@/apis/knowledge_api'
 import { useConfigStore } from '@/stores/config'
 import ModelSelectorComponent from '@/components/ModelSelectorComponent.vue'
 
@@ -214,7 +191,6 @@ const defaultBenchmarkName = () => {
 // 响应式数据
 const formRef = ref()
 const generating = ref(false)
-const graphIndexedChunks = ref(0)
 
 const formState = reactive({
   name: defaultBenchmarkName(),
@@ -223,7 +199,6 @@ const formState = reactive({
   neighbors_count: 1,
   concurrency_count: 10,
   generation_mode: 'vector',
-  graph_expand_top_k: 1,
   llm_model_spec: configStore.config?.default_model || ''
 })
 
@@ -243,7 +218,6 @@ const visible = computed({
   set: (val) => emit('update:visible', val)
 })
 
-const graphEnhancedDisabled = computed(() => graphIndexedChunks.value <= 0)
 
 const generationModeOptions = computed(() => [
   {
@@ -254,36 +228,9 @@ const generationModeOptions = computed(() => [
     helper: '适合快速生成通用评估基准。',
     icon: Database,
     disabled: false
-  },
-  {
-    value: 'graph_enhanced',
-    label: '图增强构建',
-    tag: '图谱',
-    description: '在向量召回基础上结合知识图谱扩展相关 chunks。',
-    helper: graphEnhancedDisabled.value
-      ? '当前知识库尚未完成图谱构建，暂不能使用图增强构建'
-      : `已构建图谱的 chunks：${graphIndexedChunks.value}`,
-    icon: Network,
-    disabled: graphEnhancedDisabled.value
+
   }
 ])
-
-const loadGraphBuildStatus = async () => {
-  if (!props.kbId) return
-  try {
-    const status = await graphBuildApi.getStatus(props.kbId)
-    graphIndexedChunks.value = Number(status?.indexed_chunks || 0)
-    if (graphEnhancedDisabled.value && formState.generation_mode === 'graph_enhanced') {
-      formState.generation_mode = 'vector'
-    }
-  } catch (error) {
-    console.error('加载图谱构建状态失败:', error)
-    graphIndexedChunks.value = 0
-    if (formState.generation_mode === 'graph_enhanced') {
-      formState.generation_mode = 'vector'
-    }
-  }
-}
 
 const selectGenerationMode = (option) => {
   if (option.disabled) return
@@ -307,7 +254,6 @@ const handleGenerate = async () => {
       neighbors_count: formState.neighbors_count,
       concurrency_count: formState.concurrency_count,
       generation_mode: formState.generation_mode,
-      graph_expand_top_k: formState.graph_expand_top_k,
       llm_model_spec: formState.llm_model_spec
     }
 
@@ -346,7 +292,6 @@ const resetForm = () => {
     neighbors_count: 1,
     concurrency_count: 10,
     generation_mode: 'vector',
-    graph_expand_top_k: 1,
     llm_model_spec: configStore.config?.default_model || ''
   })
   generating.value = false
@@ -361,7 +306,6 @@ const handleSelectLLMModel = (modelSpec) => {
 watch(visible, (val) => {
   if (val && !generating.value) {
     resetForm()
-    loadGraphBuildStatus()
   }
 })
 </script>

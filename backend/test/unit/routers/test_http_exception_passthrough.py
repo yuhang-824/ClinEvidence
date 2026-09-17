@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 from server.routers import (
     auth_router,
     external_kb_router,
-    graph_router,
     knowledge_dashboard_router,
     knowledge_eval_router,
     knowledge_router,
@@ -26,12 +25,6 @@ from server.routers import (
     ("endpoint", "kwargs", "target", "method"),
     [
         (
-            knowledge_router.configure_graph_build,
-            {"kb_id": "kb-1", "data": {}},
-            knowledge_router.MilvusGraphService,
-            "configure",
-        ),
-        (
             knowledge_router.get_databases,
             {},
             knowledge_router.knowledge_base,
@@ -43,7 +36,6 @@ from server.routers import (
             knowledge_eval_router.EvaluationService,
             "list_datasets",
         ),
-        (graph_router.get_graphs, {}, graph_router.knowledge_base, "get_databases_by_uid"),
         (
             knowledge_dashboard_router.read_knowledge_stats,
             {},
@@ -143,30 +135,6 @@ async def test_document_download_preserves_inner_http_exception(monkeypatch):
         await knowledge_router.download_document("kb-1", "file-1", current_user=SimpleNamespace(uid="user-1"))
 
     assert caught.value is error
-
-
-@pytest.mark.parametrize(
-    ("error", "status_code", "detail"),
-    [
-        (HTTPException(429, {"code": "busy"}, headers={"Retry-After": "30"}), 429, {"code": "busy"}),
-        (ValueError("参数无效"), 400, "参数无效"),
-        (ValueError("配置已锁定"), 409, "配置已锁定"),
-        (RuntimeError("服务故障"), 500, "配置图谱构建失败: 服务故障"),
-    ],
-)
-def test_graph_configuration_error_response(monkeypatch, error, status_code, detail):
-    """通过实际 Router 检查响应协议，保持非 HTTP 异常原有映射。"""
-    app = FastAPI()
-    app.include_router(knowledge_router.knowledge)
-    app.dependency_overrides[knowledge_router.require_knowledge_base_manage] = lambda: SimpleNamespace(uid="user-1")
-    monkeypatch.setattr(knowledge_router.MilvusGraphService, "configure", AsyncMock(side_effect=error))
-
-    response = TestClient(app).post("/knowledge/databases/kb-1/graph-build/config", json={})
-
-    assert response.status_code == status_code
-    assert response.json() == {"detail": detail}
-    if isinstance(error, HTTPException):
-        assert response.headers["Retry-After"] == "30"
 
 
 @pytest.mark.parametrize(

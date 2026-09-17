@@ -63,11 +63,6 @@ _TASK_DEFINITIONS = {
             failure_function="fail_knowledge_file_task",
         ),
         TaskDefinition(
-            "knowledge_graph_index",
-            "yuxi.services.knowledge_task_service",
-            "run_knowledge_graph",
-        ),
-        TaskDefinition(
             "knowledge_virtual_folder_migration",
             "yuxi.services.knowledge_task_service",
             "run_virtual_folder_migration",

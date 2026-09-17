@@ -62,7 +62,7 @@ test('只为需要嵌入模型的类型构建模型和分块参数', () => {
 test('知识库类型标签映射将 milvus 解析为 ClinEvidence', () => {
   assert.equal(getKbTypeLabel('milvus'), 'ClinEvidence')
   assert.equal(getKbTypeLabel('Milvus'), 'ClinEvidence')
-  assert.equal(getKbTypeLabel('dify'), 'Dify')
-  assert.equal(getKbTypeLabel('notion'), 'Notion')
-  assert.equal(getKbTypeLabel('unknown'), 'unknown')
+  assert.equal(getKbTypeLabel('dify'), 'dify（不支持）')
+  assert.equal(getKbTypeLabel('notion'), 'notion（不支持）')
+  assert.equal(getKbTypeLabel('unknown'), 'unknown（不支持）')
 })

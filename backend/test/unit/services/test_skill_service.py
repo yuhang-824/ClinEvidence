@@ -568,8 +568,6 @@ def test_html_preview_builtin_skill_spec(builtin_skill_specs):
     assert "普通 `html` 代码块" in content
 
 
-def test_deep_research_builtin_skill_includes_html_preview_dependency(builtin_skill_specs):
-    assert builtin_skill_specs["deep-research"]["skill_dependencies"] == ["html-preview"]
 
 
 def test_knowledge_base_builtin_skill_spec(builtin_skill_specs):
@@ -588,19 +586,6 @@ def test_knowledge_base_builtin_skill_spec(builtin_skill_specs):
     assert (knowledge_base["source_dir"] / "SKILL.md").exists()
 
 
-def test_mysql_reporter_builtin_skill_spec_replaces_reporter_and_deep_reporter(builtin_skill_specs):
-    assert "reporter" not in builtin_skill_specs
-    assert "deep-reporter" not in builtin_skill_specs
-    assert "mysql-reporter" in builtin_skill_specs
-    mysql_reporter = builtin_skill_specs["mysql-reporter"]
-    assert mysql_reporter["name"] == "mysql reporter"
-    assert mysql_reporter["tool_dependencies"] == []
-    assert mysql_reporter["mcp_dependencies"] == ["mcp-server-chart"]
-    assert (mysql_reporter["source_dir"] / "SKILL.md").exists()
-    for script_name in ("list_tables.py", "describe_table.py", "query.py"):
-        script_path = mysql_reporter["source_dir"] / "scripts" / script_name
-        assert script_path.exists()
-        assert script_path.read_text(encoding="utf-8").startswith("# /// script")
 
 
 def test_is_valid_skill_slug():

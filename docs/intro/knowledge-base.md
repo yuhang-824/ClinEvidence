@@ -8,21 +8,11 @@
 - 一份不含敏感信息的测试文档；
 - 一个管理员账号。
 
-Dify、Notion 连接器、知识库管理 API 和图谱运维见[知识库管理与 API 参考](../advanced/knowledge-base-operations.md)。
+知识库管理 API 见[知识库管理与 API 参考](../advanced/knowledge-base-operations.md)。
 
 ## 你会得到什么
 
 完成后，知识库详情页中的文件应处于 `indexed`，检索测试应返回带来源的片段，配置了该知识库的智能体也能根据同一份文档回答问题。
-
-## 选择知识库类型
-
-| 类型 | 能做什么 | 适用场景 |
-| --- | --- | --- |
-| Milvus | 上传、解析、索引和检索文档；支持知识导图和知识图谱 | 自建文档知识库 |
-| Dify | 调用 Dify Dataset 的检索接口 | 复用已有 Dify 数据集 |
-| Notion | 调用 Notion Data Source 的检索接口 | 复用已有 Notion 内容 |
-
-Dify 和 Notion 是只读连接器，不能在 Yuxi 中上传、解析、索引或预览文档全文。本教程使用 Milvus。
 
 ## 1. 创建知识库
 
@@ -88,6 +78,6 @@ Dify 和 Notion 是只读连接器，不能在 Yuxi 中上传、解析、索引�
 ## 下一步
 
 - [文档处理与 OCR](../advanced/document-processing.md)：调整解析器、OCR 和分块参数。
-- [知识库管理与 API 参考](../advanced/knowledge-base-operations.md)：使用 API、知识导图和知识图谱。
+- [知识库管理与 API 参考](../advanced/knowledge-base-operations.md)：使用 API 和知识导图。
 - [知识库评估](./evaluation.md)：建立检索质量基准。
 - [知识库机制详解](../mechanisms/knowledge-base.md)：理解状态、存储、权限和恢复。

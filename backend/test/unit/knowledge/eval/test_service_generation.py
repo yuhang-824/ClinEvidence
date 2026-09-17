@@ -76,8 +76,7 @@ async def test_generate_dataset_saves_generation_params(task_submission):
         neighbors_count=3,
         concurrency_count=4,
         llm_model_spec="test:model",
-        generation_mode="graph_enhanced",
-        graph_expand_top_k=2,
+        generation_mode="vector",
         created_by="user_1",
     )
 
@@ -85,8 +84,7 @@ async def test_generate_dataset_saves_generation_params(task_submission):
     assert task_submission["payload_match"] == {"dataset_id": task_submission["payload"]["dataset_id"]}
     assert task_submission["published"] == "task_1"
     params = service.eval_repo.created_dataset["build_metadata"]["params"]
-    assert params["generation_mode"] == "graph_enhanced"
-    assert params["graph_expand_top_k"] == 2
+    assert params["generation_mode"] == "vector"
     assert service.eval_repo.created_dataset["build_metadata"]["task_id"] == "task_1"
 
 
@@ -152,7 +150,7 @@ async def test_generate_dataset_rejects_graph_mode_without_indexed_chunks():
     service.eval_repo = FakeEvaluationRepository()
     service.chunk_repo = FakeChunkRepository(indexed_count=0)
 
-    with pytest.raises(ValueError, match="尚未完成图索引"):
+    with pytest.raises(ValueError, match="不支持的评估基准生成方式"):
         await service.generate_dataset(
             kb_id="db_1",
             name="dataset",
@@ -162,7 +160,6 @@ async def test_generate_dataset_rejects_graph_mode_without_indexed_chunks():
             concurrency_count=4,
             llm_model_spec="test:model",
             generation_mode="graph_enhanced",
-            graph_expand_top_k=1,
             created_by="user_1",
         )
 
