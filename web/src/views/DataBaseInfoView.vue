@@ -111,19 +111,16 @@
                   <span class="file-stat-label">待解析</span>
                 </div>
               </button>
-              <button
+              <span
                 v-if="canManageDatabase && pendingIndexCount > 0"
-                type="button"
                 class="lucide-icon-btn extension-panel-action extension-panel-action-secondary file-stat-card file-stat-warning file-stat-summary"
-                :disabled="store.state.chunkLoading"
-                @click="confirmBatchIndex"
               >
                 <DatabaseIcon :size="16" />
                 <div class="file-stat-inline">
                   <span class="file-stat-value">{{ pendingIndexCount }}</span>
                   <span class="file-stat-label">待入库</span>
                 </div>
-              </button>
+              </span>
               <button
                 type="button"
                 class="lucide-icon-btn extension-panel-action extension-panel-action-secondary file-stat-card file-stat-summary"
@@ -639,19 +636,6 @@ const confirmBatchParse = () => {
   }
 
   const opened = fileTableRef.value?.startPendingParse?.(count)
-  if (!opened) {
-    message.error('文件列表尚未加载完成，请稍后再试')
-  }
-}
-
-const confirmBatchIndex = () => {
-  const count = pendingIndexCount.value
-  if (count <= 0) {
-    message.info('没有待入库文档')
-    return
-  }
-
-  const opened = fileTableRef.value?.startPendingIndex?.(count)
   if (!opened) {
     message.error('文件列表尚未加载完成，请稍后再试')
   }
@@ -1261,7 +1245,7 @@ onUnmounted(() => {
 }
 
 .file-stat-warning {
-  cursor: pointer;
+  cursor: default;
   color: var(--color-warning-700);
   border-color: var(--color-warning-100);
   background: var(--color-warning-50);
@@ -1270,8 +1254,12 @@ onUnmounted(() => {
     color: var(--color-warning-900);
   }
 
-  &:hover:not(:disabled),
-  &:focus-visible:not(:disabled) {
+  button& {
+    cursor: pointer;
+  }
+
+  button&:hover:not(:disabled),
+  button&:focus-visible:not(:disabled) {
     border-color: var(--color-warning-500);
     background: var(--color-warning-50);
     color: var(--color-warning-900);

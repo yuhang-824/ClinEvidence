@@ -34,37 +34,6 @@
       </div>
     </a-modal>
 
-    <!-- 入库/重新入库参数配置模态框 -->
-    <a-modal
-      v-model:open="indexConfigModalVisible"
-      :title="indexConfigModalTitle"
-      :confirm-loading="indexConfigModalLoading"
-      width="600px"
-      @cancel="handleIndexConfigCancel"
-    >
-      <template #footer>
-        <a-button key="back" @click="handleIndexConfigCancel">取消</a-button>
-        <a-button key="submit" type="primary" @click="handleIndexConfigConfirm">确定</a-button>
-      </template>
-      <div class="index-params">
-        <a-alert
-          v-if="isPendingIndexOperation"
-          class="index-pending-alert"
-          type="info"
-          show-icon
-          :message="`将提交 ${pendingIndexTotalText} 个待入库文件，任务会在后台按批处理，可在任务中心查看进度。`"
-        />
-        <ChunkParamsConfig
-          :temp-chunk-params="indexParams"
-          :show-qa-split="true"
-          :show-chunk-size-overlap="true"
-          :show-preset="true"
-          :allow-preset-follow-default="true"
-          :database-preset-id="store.database?.additional_params?.chunk_preset_id || 'general'"
-        />
-      </div>
-    </a-modal>
-
     <!-- 新建文件夹模态框 -->
     <a-modal
       v-model:open="createFolderModalVisible"
@@ -244,15 +213,6 @@
             </a-button>
             <a-button
               type="link"
-              @click="handleBatchIndex"
-              :loading="batchIndexing"
-              :disabled="!canBatchIndex"
-              :icon="h(Database, { size: 16 })"
-            >
-              批量入库
-            </a-button>
-            <a-button
-              type="link"
               danger
               @click="handleBatchDelete"
               :loading="batchDeleting"
@@ -423,30 +383,6 @@
                     {{ getFilePrimaryAction(row)?.label || '解析文件' }}
                   </a-button>
 
-                  <!-- Index Action -->
-                  <a-button
-                    v-if="!readonly && getFilePrimaryAction(row)?.type === FILE_ACTIONS.INDEX"
-                    type="text"
-                    block
-                    @click="handleIndexFile(row)"
-                    :disabled="lock"
-                  >
-                    <template #icon><component :is="h(Database)" size="14" /></template>
-                    {{ getFilePrimaryAction(row)?.label || '入库' }}
-                  </a-button>
-
-                  <!-- Reindex Action -->
-                  <a-button
-                    v-if="!readonly && canReindexFile(row)"
-                    type="text"
-                    block
-                    @click="handleReindexFile(row)"
-                    :disabled="lock"
-                  >
-                    <template #icon><component :is="h(RotateCw)" size="14" /></template>
-                    重新入库
-                  </a-button>
-
                   <a-button
                     v-if="!readonly"
                     type="text"
@@ -482,10 +418,8 @@ import {
   FILE_STATUS_FILTER_OPTIONS,
   canDeleteFile,
   canDownloadFile,
-  canIndexFile,
   canOpenFileDetail,
   canParseFile,
-  canReindexFile,
   canSelectFile,
   getFilePrimaryAction,
   getFileStatusSortWeight,
@@ -506,13 +440,11 @@ import {
 import {
   Trash2,
   Download,
-  RotateCw,
   ListRestart,
   Ellipsis,
   FolderPlus,
   CheckSquare,
   FileText,
-  Database,
   Filter,
   MoreHorizontal,
   Pencil,
@@ -571,7 +503,7 @@ const getStatusIcon = (status) => {
 }
 
 const hasStatusAction = (record) => {
-  return Boolean(getFilePrimaryAction(record))
+  return getFilePrimaryAction(record)?.type === FILE_ACTIONS.PARSE
 }
 
 const getStatusActionTitle = (record) => {
@@ -596,7 +528,6 @@ const refreshing = computed(() => store.state.databaseLoading || store.fileBrows
 const lock = computed(() => store.state.lock)
 const batchDeleting = computed(() => store.state.batchDeleting)
 const batchParsing = computed(() => store.state.chunkLoading)
-const batchIndexing = computed(() => store.state.chunkLoading)
 const selectedRowKeys = computed({
   get: () => store.selectedRowKeys,
   set: (keys) => (store.selectedRowKeys = keys)
@@ -667,7 +598,6 @@ defineExpose({
     statusFilter.value = status
     await applyFilters({ status })
   },
-  startPendingIndex: (count) => startPendingIndex(count),
   startPendingParse: (count) => startPendingParse(count),
   getCurrentFolderId: () => store.fileBrowser.parentId,
   refresh: () => handleRefresh()
@@ -825,11 +755,6 @@ const handleBreadcrumbDrop = async ({ item }) => {
   await moveDocument(record, item.file_id || null)
 }
 
-// 入库/重新入库参数配置相关
-const indexConfigModalVisible = ref(false)
-const indexConfigModalLoading = computed(() => store.state.chunkLoading)
-const indexConfigModalTitle = ref('入库参数配置')
-
 // 解析/批量解析/重试解析参数配置相关
 const DEFAULT_OCR_ENGINE = 'rapid_ocr'
 const configStore = useConfigStore()
@@ -869,26 +794,6 @@ const resetParseParams = (processingParams = null) => {
     parseParams.value = { ocr_engine: resolveDefaultOcrEngine() }
   }
 }
-
-const createDefaultIndexParams = () => ({
-  chunk_preset_id: '',
-  chunk_parser_config: {}
-})
-
-const indexParams = ref(createDefaultIndexParams())
-
-const buildIndexParamsPayload = () => {
-  return buildChunkParamsPayload(indexParams.value, {
-    includeSizeOverlap: true
-  })
-}
-const currentIndexFileIds = ref([])
-const isBatchIndexOperation = ref(false)
-const isPendingIndexOperation = ref(false)
-const pendingIndexTotal = ref(0)
-const pendingIndexTotalText = computed(() =>
-  Number(pendingIndexTotal.value || 0).toLocaleString('zh-CN')
-)
 
 const pageSizeOptions = ['100', '300', '500']
 
@@ -982,14 +887,6 @@ const canBatchParse = computed(() => {
   return selectedRowKeys.value.some((key) => {
     const file = files.value.find((f) => f.file_id === key)
     return !lock.value && canParseFile(file)
-  })
-})
-
-// 计算是否可以批量入库
-const canBatchIndex = computed(() => {
-  return selectedRowKeys.value.some((key) => {
-    const file = files.value.find((f) => f.file_id === key)
-    return !lock.value && canIndexFile(file)
   })
 })
 
@@ -1110,47 +1007,6 @@ const startPendingParse = (count = 0) => {
   return true
 }
 
-const handleBatchIndex = async () => {
-  const validKeys = selectedRowKeys.value.filter((key) => {
-    const file = files.value.find((f) => f.file_id === key)
-    return canIndexFile(file)
-  })
-
-  if (validKeys.length === 0) {
-    message.warning('没有可入库的文件')
-    return
-  }
-
-  currentIndexFileIds.value = [...validKeys]
-  isBatchIndexOperation.value = true
-  isPendingIndexOperation.value = false
-  pendingIndexTotal.value = 0
-  indexConfigModalTitle.value = '批量入库参数配置'
-  indexConfigModalVisible.value = true
-}
-
-const startPendingIndex = (count = 0) => {
-  if (lock.value) {
-    message.warning('当前有文件处理中，请稍后再试')
-    return false
-  }
-
-  const total = Number(count || 0)
-  if (total <= 0) {
-    message.info('没有待入库文档')
-    return false
-  }
-
-  currentIndexFileIds.value = []
-  isBatchIndexOperation.value = false
-  isPendingIndexOperation.value = true
-  pendingIndexTotal.value = total
-  indexConfigModalTitle.value = '待入库文件参数配置'
-  resetIndexParams()
-  indexConfigModalVisible.value = true
-  return true
-}
-
 const openFileDetail = (record) => {
   if (!canOpenFileDetail(record)) {
     message.error('文件未处理完成，请稍后再试')
@@ -1249,23 +1105,6 @@ const handleStatusAction = async (record) => {
     await handleParseFile(record)
     return
   }
-
-  if (action?.type === FILE_ACTIONS.INDEX) {
-    await handleIndexFile(record)
-  }
-}
-
-const resetIndexParams = (processingParams = null) => {
-  if (!processingParams) {
-    indexParams.value = createDefaultIndexParams()
-    return
-  }
-
-  const chunkParserConfig = processingParams.chunk_parser_config
-  indexParams.value = {
-    chunk_preset_id: processingParams.chunk_preset_id || '',
-    chunk_parser_config: isPlainObject(chunkParserConfig) ? { ...chunkParserConfig } : {}
-  }
 }
 
 const loadRecordProcessingParams = async (record) => {
@@ -1275,74 +1114,6 @@ const loadRecordProcessingParams = async (record) => {
 
   const detail = await documentApi.getDocumentInfo(store.kbId, record.file_id)
   return detail?.processing_params || null
-}
-
-const handleIndexFile = async (record) => {
-  closePopover(record.file_id)
-  currentIndexFileIds.value = [record.file_id]
-  isBatchIndexOperation.value = false
-  isPendingIndexOperation.value = false
-  pendingIndexTotal.value = 0
-  indexConfigModalTitle.value = '入库参数配置'
-
-  const processingParams = await loadRecordProcessingParams(record)
-  resetIndexParams(processingParams)
-
-  indexConfigModalVisible.value = true
-}
-
-const handleReindexFile = async (record) => {
-  closePopover(record.file_id)
-  currentIndexFileIds.value = [record.file_id]
-  isBatchIndexOperation.value = false
-  isPendingIndexOperation.value = false
-  pendingIndexTotal.value = 0
-  indexConfigModalTitle.value = '重新入库参数配置'
-
-  const processingParams = await loadRecordProcessingParams(record)
-  resetIndexParams(processingParams)
-
-  indexConfigModalVisible.value = true
-}
-
-// 入库确认 (统一处理 Index 和 Reindex)
-const handleIndexConfigConfirm = async () => {
-  try {
-    const params = buildIndexParamsPayload()
-    const result = isPendingIndexOperation.value
-      ? await store.indexPendingFiles(params, pendingIndexTotal.value)
-      : await store.indexFiles(currentIndexFileIds.value, params)
-    if (result) {
-      currentIndexFileIds.value = []
-      pendingIndexTotal.value = 0
-      // 清空选择
-      if (isBatchIndexOperation.value || isPendingIndexOperation.value) {
-        selectedRowKeys.value = []
-      }
-      // 关闭模态框
-      indexConfigModalVisible.value = false
-
-      isBatchIndexOperation.value = false
-      isPendingIndexOperation.value = false
-      resetIndexParams()
-    } else {
-      // message.error(`入库失败: ${result.message}`); // store already shows message
-    }
-  } catch (error) {
-    console.error('入库失败:', error)
-    const errorMessage = error.message || '入库失败，请稍后重试'
-    message.error(errorMessage)
-  }
-}
-
-// 入库取消
-const handleIndexConfigCancel = () => {
-  indexConfigModalVisible.value = false
-  currentIndexFileIds.value = []
-  isBatchIndexOperation.value = false
-  isPendingIndexOperation.value = false
-  pendingIndexTotal.value = 0
-  resetIndexParams()
 }
 
 watch(
@@ -1382,9 +1153,7 @@ const formatChunkAmount = (file) => `${formatContentCount(file?.chunk_count)} Ch
 
 // 导入工具函数
 import { parseToShanghai } from '@/utils/time'
-import { buildChunkParamsPayload, isPlainObject } from '@/utils/chunkUtils'
 import { parseDownloadFilename } from '@/utils/file_utils'
-import ChunkParamsConfig from '@/components/ChunkParamsConfig.vue'
 import FileBrowserTable from '@/components/common/FileBrowserTable.vue'
 import FileTypeIcon from '@/components/common/FileTypeIcon.vue'
 import FallbackAvatar from '@/components/common/FallbackAvatar.vue'
@@ -1488,10 +1257,6 @@ import { generatePixelAvatar } from '@/utils/pixelAvatar'
     width: 14px;
     height: 14px;
   }
-}
-
-.index-pending-alert {
-  margin-bottom: 12px;
 }
 
 .parse-params {
