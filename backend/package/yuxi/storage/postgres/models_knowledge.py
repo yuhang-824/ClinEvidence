@@ -118,6 +118,7 @@ class KnowledgeChunk(Base):
     chunk_index = Column(Integer, nullable=False)
     content = Column(Text, nullable=False)
     start_char_pos = Column(Integer)
+    source_metadata = Column(JSON_VALUE)
     end_char_pos = Column(Integer)
     start_token_pos = Column(Integer)
     end_token_pos = Column(Integer)

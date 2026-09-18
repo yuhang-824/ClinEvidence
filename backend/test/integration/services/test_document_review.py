@@ -3,7 +3,7 @@
 import asyncio
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from test.integration.services.test_schema_migration_version import _create_isolated_manager, _drop_isolated_schema
@@ -51,6 +51,25 @@ async def test_revisions_gate_concurrency_scope_and_migration(monkeypatch):
             )
         await manager.create_knowledge_tables()
         await manager.create_knowledge_tables()
+        # v3 升级只能增加来源列，原文件及旧片段必须保留。
+        async with engine.begin() as connection:
+            await connection.execute(text("ALTER TABLE knowledge_chunks DROP COLUMN source_metadata"))
+            await connection.execute(
+                text(
+                    "INSERT INTO knowledge_chunks (chunk_id,file_id,kb_id,chunk_index,content,"
+                    "graph_structure_indexed,graph_indexed,graph_extraction_details) "
+                    "VALUES ('old','file','kb',0,'legacy content',false,false,'{}')"
+                )
+            )
+        await manager.upgrade_knowledge_schema_v3_to_v4()
+        await manager.upgrade_knowledge_schema_v3_to_v4()
+        async with engine.begin() as connection:
+            row = (
+                await connection.execute(
+                    text("SELECT content, source_metadata FROM knowledge_chunks WHERE chunk_id='old'")
+                )
+            ).one()
+            assert row.content == "legacy content" and row.source_metadata is None
         monkeypatch.setattr(document_review_repository, "pg_manager", manager)
         monkeypatch.setattr(knowledge_file_repository, "pg_manager", manager)
         repo = DocumentReviewRepository()
@@ -75,6 +94,13 @@ async def test_revisions_gate_concurrency_scope_and_migration(monkeypatch):
         with pytest.raises(ReviewConflict, match="版本"):
             await repo.write("kb", "file", version=1, operator="reviewer", approve=True)
         await repo.write("kb", "file", version=2, operator="reviewer", approve=True)
+        with pytest.raises(ReviewConflict, match="预览版本"):
+            await files.update_fields_if_status(
+                kb_id="kb",
+                file_id="file",
+                allowed_statuses={"parsed"},
+                data={"status": "indexing", "processing_params": {"review_version": 1}},
+            )
         await files.update_fields_if_status(
             kb_id="kb", file_id="file", allowed_statuses={"parsed"}, data={"status": "indexing"}
         )
@@ -120,5 +146,39 @@ async def test_revisions_gate_concurrency_scope_and_migration(monkeypatch):
             "kb", "legacy", version=0, operator="reviewer", initial=("old source", "new draft", {"warnings": []})
         )
         assert await repo.published_content("kb", "legacy") is None
+    finally:
+        await _drop_isolated_schema(schema, admin, engine)
+
+
+async def test_replaced_chunk_rejects_old_source_version(monkeypatch):
+    """相同片段 ID 被重新入库覆盖后，旧版本来源请求明确失败。"""
+    from yuxi.knowledge.chunking.mixed import chunk_mixed
+    from yuxi.repositories import knowledge_chunk_repository
+    from yuxi.repositories.knowledge_chunk_repository import KnowledgeChunkRepository
+
+    schema, admin, engine, manager = await _create_isolated_manager("pytest_chunk_source")
+    manager.AsyncSession = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        await manager.create_knowledge_tables()
+        monkeypatch.setattr(knowledge_chunk_repository, "pg_manager", manager)
+        async with manager.get_async_session_context() as session:
+            session.add(KnowledgeBase(kb_id="kb", name="fixture", kb_type="milvus"))
+            await session.flush()
+            session.add(KnowledgeFile(file_id="file", kb_id="kb", filename="fixture.pdf", status="indexed"))
+            await session.flush()
+            for version in (1, 2):
+                session.add(KnowledgeDocumentRevision(file_id="file", version=version, content="同样的内容", report={}))
+        repo = KnowledgeChunkRepository()
+        first = chunk_mixed("同样的内容", "file", "fixture.pdf", {}, revision={"version": 1})[0]
+        await repo.batch_upsert([{**first, "kb_id": "kb"}])
+        assert (await repo.read_source("kb", "file", first["id"], 1))["excerpts"][0]["text"] == "同样的内容"
+        second = chunk_mixed("同样的内容", "file", "fixture.pdf", {}, revision={"version": 2})[0]
+        assert second["id"] == first["id"]
+        await repo.batch_upsert([{**second, "kb_id": "kb"}])
+        with pytest.raises(ReviewConflict, match="重新入库"):
+            await repo.read_source("kb", "file", first["id"], 1)
+        assert (await repo.read_source("kb", "file", second["id"], 2))["source_metadata"]["revision"] == 2
+        with pytest.raises(LookupError):
+            await repo.read_source("other", "file", second["id"], 2)
     finally:
         await _drop_isolated_schema(schema, admin, engine)

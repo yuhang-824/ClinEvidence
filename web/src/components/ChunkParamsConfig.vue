@@ -29,21 +29,24 @@
         <a-form-item v-if="showChunkSizeOverlap" name="chunk_token_num">
           <template #label>
             <span class="chunk-preset-label">
-              最大 Token 数
-              <a-tooltip title="每个文本片段的最大 token 数，留空时使用默认值 512">
+              {{ effectivePresetId === 'mixed' ? '目标 Token 数' : '最大 Token 数' }}
+              <a-tooltip title="默认 512；混合材料保留完整结构单元，超长时提示人工检查">
                 <QuestionCircleOutlined class="chunk-preset-help-icon" />
               </a-tooltip>
             </span>
           </template>
           <a-input-number
             v-model:value="parserConfig.chunk_token_num"
-            :min="100"
-            :max="10000"
+            :min="effectivePresetId === 'mixed' ? 64 : 100"
+            :max="effectivePresetId === 'mixed' ? 4096 : 10000"
             placeholder="默认 512"
             style="width: 100%"
           />
         </a-form-item>
-        <a-form-item v-if="showChunkSizeOverlap" name="overlapped_percent">
+        <a-form-item
+          v-if="showChunkSizeOverlap && effectivePresetId !== 'mixed'"
+          name="overlapped_percent"
+        >
           <template #label>
             <span class="chunk-preset-label">
               重叠比例 (%)
@@ -60,7 +63,7 @@
             style="width: 100%"
           />
         </a-form-item>
-        <a-form-item v-if="showQaSplit" name="delimiter">
+        <a-form-item v-if="showQaSplit && effectivePresetId !== 'mixed'" name="delimiter">
           <template #label>
             <span class="chunk-preset-label">
               分隔符

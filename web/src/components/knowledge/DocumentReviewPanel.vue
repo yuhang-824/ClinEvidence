@@ -38,7 +38,7 @@
             >审核通过</a-button
           >
           <a-button
-            :disabled="!editable || dirty || !latest.approved_at"
+            :disabled="!editable || dirty || !latest.approved_at || !preview"
             :loading="busy"
             @click="indexDocument"
             >切片入库</a-button
@@ -50,6 +50,38 @@
       </p>
       <a-alert v-if="actionError" :message="actionError" type="error" show-icon />
       <template v-if="current">
+        <div class="chunk-preview-controls">
+          <strong>混合材料切片</strong>
+          <label
+            >目标长度（估算 tokens）
+            <a-input-number v-model:value="chunkSize" :min="64" :max="4096" :disabled="busy" />
+          </label>
+          <a-button
+            :disabled="dirty || busy || current !== latest"
+            :loading="previewLoading"
+            @click="previewChunks"
+            >预览切片</a-button
+          >
+          <span>保存后预览，审核通过后按此预览入库。</span>
+        </div>
+        <a-alert v-if="previewError" :message="previewError" type="error" show-icon />
+        <details v-if="preview" open class="chunk-preview-list">
+          <summary>待入库片段：{{ preview.chunks.length }} 个 · 版本 {{ preview.version }}</summary>
+          <SourceChunkCard
+            v-for="chunk in preview.chunks.slice((previewPage - 1) * 10, previewPage * 10)"
+            :key="chunk.id"
+            :chunk="chunk"
+            :kb-id="kbId"
+            :file-id="fileId"
+            :source-text="current.content"
+          />
+          <a-pagination
+            v-model:current="previewPage"
+            :total="preview.chunks.length"
+            :page-size="10"
+            :show-size-changer="false"
+          />
+        </details>
         <details class="quality-report">
           <summary>
             清洗与核验记录（{{ current.report.changes?.length || 0 }} 处处理，{{
@@ -108,6 +140,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { documentApi } from '@/apis/knowledge_api'
+import SourceChunkCard from '@/components/knowledge/SourceChunkCard.vue'
 
 const props = defineProps({
   kbId: { type: String, required: true },
@@ -122,6 +155,12 @@ const data = ref({ revisions: [] })
 const selected = ref(null)
 const draft = ref('')
 const sourceMode = ref('text')
+const chunkSize = ref(512)
+const preview = ref(null)
+const previewLoading = ref(false)
+const previewError = ref('')
+const previewPage = ref(1)
+let previewRequestId = 0
 let requestId = 0
 const latest = computed(() => data.value.revisions.at(-1))
 const published = computed(
@@ -155,12 +194,41 @@ const rawContent = computed(
 watch(current, (value) => {
   draft.value = value?.content || ''
 })
+watch([draft, selected, chunkSize], () => {
+  previewRequestId++
+  preview.value = null
+  previewLoading.value = false
+  previewError.value = ''
+})
+
+async function previewChunks() {
+  const id = ++previewRequestId
+  preview.value = null
+  previewLoading.value = true
+  previewError.value = ''
+  try {
+    const result = await documentApi.previewDocumentChunks(props.kbId, props.fileId, {
+      version: current.value.version,
+      chunk_token_num: chunkSize.value
+    })
+    if (id === previewRequestId) {
+      preview.value = result
+      previewPage.value = 1
+    }
+  } catch (e) {
+    if (id === previewRequestId) previewError.value = e.message || '预览失败，请重试'
+  } finally {
+    if (id === previewRequestId) previewLoading.value = false
+  }
+}
 
 function accept(result) {
   data.value = result
   selected.value = result.revisions.at(-1)?.version ?? null
 }
 async function load() {
+  previewRequestId++
+  preview.value = null
   const id = ++requestId
   loading.value = true
   error.value = ''
@@ -195,7 +263,7 @@ async function indexDocument() {
   busy.value = true
   actionError.value = ''
   try {
-    await documentApi.indexDocuments(props.kbId, [props.fileId])
+    await documentApi.indexDocuments(props.kbId, [props.fileId], preview.value.params)
     message.success('入库任务已提交，可在任务列表查看结果')
     await load()
   } catch (e) {
@@ -221,6 +289,24 @@ watch(() => [props.kbId, props.fileId], load, { immediate: true })
   flex-wrap: wrap;
   .ant-select {
     min-width: 160px;
+  }
+}
+.chunk-preview-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+  span {
+    color: var(--color-text-secondary);
+  }
+}
+.chunk-preview-list {
+  margin-bottom: 16px;
+  max-height: 55vh;
+  overflow: auto;
+  .source-chunk {
+    margin: 12px 0;
   }
 }
 .review-note,

@@ -8,6 +8,10 @@ from yuxi.utils import logger
 DEFAULT_CHUNK_PRESET_ID = "general"
 
 CHUNK_PRESETS: dict[str, dict[str, str]] = {
+    "mixed": {
+        "label": "混合材料（结构保护）",
+        "description": "保留章节、表头、字段和推荐意见；中英文正文按句切分，提供版本与原文位置。",
+    },
     "general": {
         "label": "General",
         "description": "通用分块：按分隔符和长度切分，适合大多数普通文档。",

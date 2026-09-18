@@ -155,7 +155,12 @@ async def test_pdf_upload_parse_index_retrieve_delete_without_graph(tmp_path):
             assert (await client.get(f'/api/knowledge/databases/{kb_id}/documents/missing/review')).status_code == 404
             approved = await request('POST', review_url, json={'action': 'approve', 'version': 2})
             assert approved['revisions'][-1]['approved_at']
-            indexed = await request('POST', f'/api/knowledge/databases/{kb_id}/documents/index', json={'file_ids': [file_id], 'params': {'chunk_preset_id': 'general'}})
+            preview_url = review_url.removesuffix('/review') + '/chunk-preview'
+            assert (await client.post(preview_url, json={'version': 1})).status_code == 409
+            assert (await client.post(preview_url, json={'version': 2, 'chunk_token_num': 0})).status_code == 422
+            preview = await request('POST', preview_url, json={'version': 2, 'chunk_token_num': 64})
+            assert preview['chunks'] and preview['params']['review_version'] == 2
+            indexed = await request('POST', f'/api/knowledge/databases/{kb_id}/documents/index', json={'file_ids': [file_id], 'params': preview['params']})
             for _ in range(120):
                 task = (await request('GET', f"/api/tasks/{indexed['task_id']}"))['task']
                 if task['status'] in {'success', 'failed', 'cancelled'}:
@@ -166,12 +171,22 @@ async def test_pdf_upload_parse_index_retrieve_delete_without_graph(tmp_path):
                 chunks = list(await session.scalars(select(KnowledgeChunk).where(KnowledgeChunk.file_id == file_id)))
                 assert file.status == 'indexed', task
                 assert 'AUDITED CONTENT MARKER' in '\n'.join(c.content for c in chunks)
+                chunks.sort(key=lambda c: c.chunk_index)
+                assert [c.content for c in chunks] == [c['content'] for c in preview['chunks']]
+                assert all(c.source_metadata['revision'] == 2 for c in chunks)
+            source_url = review_url.removesuffix('/review') + f'/chunks/{chunks[0].chunk_id}/source?version=2'
+            source_before = await request('GET', source_url)
+            assert '\n\n'.join(s['text'].strip() for s in source_before['excerpts']) == chunks[0].content
+            assert (await client.get(source_url.replace('version=2', 'version=1'))).status_code == 409
+            assert (await client.get(source_url.replace(f'/documents/{file_id}/', '/documents/missing/'))).status_code == 404
+            assert (await client.get(source_url.replace(kb_id, 'missing-kb'))).status_code in {403, 404}
             external = f'/api/knowledge/databases/external/{kb_id}/files/{file_id}'
             opened = await request('GET', external + '/open')
             assert 'AUDITED CONTENT MARKER' in json.dumps(opened)
             found = await request('POST', external + '/find', json={'patterns': ['AUDITED CONTENT MARKER']})
             assert 'AUDITED CONTENT MARKER' in json.dumps(found)
             await request('POST', review_url, json={'action': 'save', 'version': 2, 'content': 'UNPUBLISHED DRAFT'})
+            assert await request('GET', source_url) == source_before
             opened = await request('GET', external + '/open')
             assert 'AUDITED CONTENT MARKER' in json.dumps(opened) and 'UNPUBLISHED DRAFT' not in json.dumps(opened)
             parsed = await request('GET', f'/api/knowledge/databases/{kb_id}/documents/{file_id}/content')
@@ -186,6 +201,7 @@ async def test_pdf_upload_parse_index_retrieve_delete_without_graph(tmp_path):
                     break
                 await asyncio.sleep(1)
             assert result['status'] == 'success' and 'ALPHA' in json.dumps(result)
+            assert any(c['metadata'].get('source_metadata', {}).get('revision') == 2 for c in result['result'])
             original = await client.get(f'/api/knowledge/databases/{kb_id}/documents/{file_id}/download')
             assert original.status_code == 200 and original.content == pdf.read_bytes()
             await request('DELETE', f'/api/knowledge/databases/{kb_id}')

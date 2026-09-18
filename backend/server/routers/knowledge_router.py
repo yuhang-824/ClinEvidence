@@ -905,6 +905,51 @@ class DocumentReviewInput(BaseModel):
     content: str | None = Field(default=None, max_length=2_000_000)
 
 
+class ChunkPreviewInput(BaseModel):
+    """预览只接受已保存版本和结构切片目标长度。"""
+
+    version: int = Field(ge=1)
+    chunk_token_num: int = Field(default=512, ge=64, le=4096)
+
+
+@knowledge.post("/databases/{kb_id}/documents/{doc_id}/chunk-preview")
+async def preview_document_chunks(
+    kb_id: str, doc_id: str, payload: ChunkPreviewInput, current_user: User = Depends(require_knowledge_base_read)
+):
+    """预览结构片段，不写入索引。"""
+    from yuxi.repositories.document_review_repository import ReviewConflict
+    from yuxi.services.document_review_service import preview_chunks
+
+    try:
+        return await preview_chunks(kb_id, doc_id, **payload.model_dump())
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ReviewConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@knowledge.get("/databases/{kb_id}/documents/{doc_id}/chunks/{chunk_id}/source")
+async def get_chunk_source(
+    kb_id: str,
+    doc_id: str,
+    chunk_id: str,
+    version: int = Query(ge=1),
+    current_user: User = Depends(require_knowledge_base_read),
+):
+    """读取片段实际入库版本的来源内容。"""
+    from yuxi.services.document_review_service import read_chunk_source
+    from yuxi.repositories.document_review_repository import ReviewConflict
+
+    try:
+        return await read_chunk_source(kb_id, doc_id, chunk_id, version)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ReviewConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @knowledge.get("/databases/{kb_id}/documents/{doc_id}/review")
 async def get_document_review(kb_id: str, doc_id: str, current_user: User = Depends(require_knowledge_base_read)):
     """读取原始解析、修订和审核记录。"""

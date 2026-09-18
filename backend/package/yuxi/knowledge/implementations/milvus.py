@@ -460,6 +460,7 @@ class MilvusKB(KnowledgeBase):
                 "chunk_index": chunk["chunk_index"],
                 "content": chunk["content"],
                 "start_char_pos": chunk.get("start_char_pos"),
+                "source_metadata": chunk.get("source_metadata"),
                 "end_char_pos": chunk.get("end_char_pos"),
                 "start_token_pos": chunk.get("start_token_pos"),
                 "end_token_pos": chunk.get("end_token_pos"),
@@ -563,11 +564,18 @@ class MilvusKB(KnowledgeBase):
             return
 
         filenames = await KnowledgeFileRepository().get_filenames_by_file_ids(kb_id=kb_id, file_ids=file_ids)
+        records = await KnowledgeChunkRepository().list_by_chunk_ids(
+            [c["metadata"]["chunk_id"] for c in chunks if c.get("metadata", {}).get("chunk_id")]
+        )
+        by_id = {r.chunk_id: r for r in records if r.kb_id == kb_id}
         for chunk in chunks:
             metadata = chunk.get("metadata")
             if not isinstance(metadata, dict):
                 continue
             metadata["source"] = filenames.get(str(metadata.get("file_id") or ""), "") or "未知来源"
+            record = by_id.get(metadata.get("chunk_id"))
+            if record is not None and record.file_id == metadata.get("file_id") and record.content == chunk["content"]:
+                metadata["source_metadata"] = record.source_metadata
 
     async def _build_file_name_expr(self, kb_id: str, file_name: str | None) -> str | None:
         if not file_name:
@@ -689,11 +697,17 @@ class MilvusKB(KnowledgeBase):
             # Read markdown
             from yuxi.repositories.document_review_repository import DocumentReviewRepository
 
-            markdown_content = await DocumentReviewRepository().approved_content(kb_id, file_id)
+            revision = await DocumentReviewRepository().approved_revision(kb_id, file_id)
+            markdown_content = revision["content"]
             filename = file_meta.get("filename")
 
             # Split
-            chunks = self._split_text_into_chunks(markdown_content, file_id, filename, params)
+            if params.get("chunk_preset_id") == "mixed":
+                from yuxi.knowledge.chunking.mixed import chunk_mixed
+
+                chunks = chunk_mixed(markdown_content, file_id, filename, chunk_parser_config, revision=revision)
+            else:
+                chunks = self._split_text_into_chunks(markdown_content, file_id, filename, params)
             logger.info(
                 f"Split {filename} into {len(chunks)} chunks with params: "
                 f"chunk_preset_id={params.get('chunk_preset_id')}, "
@@ -1021,6 +1035,7 @@ class MilvusKB(KnowledgeBase):
                     "content": chunk.content,
                     "chunk_order_index": chunk.chunk_index,
                     "start_char_pos": chunk.start_char_pos,
+                    "source_metadata": chunk.source_metadata,
                     "end_char_pos": chunk.end_char_pos,
                     "start_token_pos": chunk.start_token_pos,
                     "end_token_pos": chunk.end_token_pos,

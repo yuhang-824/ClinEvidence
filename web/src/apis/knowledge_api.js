@@ -1,5 +1,6 @@
 import {
   apiGet,
+  apiPost,
   apiAdminGet,
   apiAdminPost,
   apiAdminPut,
@@ -316,6 +317,14 @@ export const documentApi = {
       params
     })
   },
+
+  previewDocumentChunks: (kbId, fileId, payload) =>
+    apiPost(`/api/knowledge/databases/${kbId}/documents/${fileId}/chunk-preview`, payload),
+
+  getChunkSource: (kbId, fileId, chunkId, version) =>
+    apiGet(
+      `/api/knowledge/databases/${kbId}/documents/${fileId}/chunks/${chunkId}/source?version=${version}`
+    ),
 
   /**
    * 手动触发全部待入库文档入库

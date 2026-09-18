@@ -74,6 +74,11 @@ def chunk_markdown(
     preset_id = normalize_chunk_preset_id(params.get("chunk_preset_id"))
     parser_config = params.get("chunk_parser_config") if isinstance(params.get("chunk_parser_config"), dict) else {}
 
+    if preset_id == "mixed":
+        from yuxi.knowledge.chunking.mixed import chunk_mixed
+
+        return chunk_mixed(markdown_content, file_id, filename, parser_config)
+
     text_chunks = _dispatch_markdown_parser(preset_id, filename, markdown_content, parser_config)
     return _build_chunk_records(text_chunks, file_id, filename, markdown_content)
 

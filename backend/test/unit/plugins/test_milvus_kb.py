@@ -319,7 +319,7 @@ async def test_index_file_persists_chunk_stats(monkeypatch):
         return collection
 
     async def read_markdown(*args):
-        return "# demo"
+        return {"content": "# demo", "version": 1, "report": {}}
 
     async def embedding_function(texts):
         return [[0.1, 0.2] for _ in texts]
@@ -332,7 +332,7 @@ async def test_index_file_persists_chunk_stats(monkeypatch):
 
     kb._get_or_create_milvus_collection = get_collection
     monkeypatch.setattr(
-        "yuxi.repositories.document_review_repository.DocumentReviewRepository.approved_content", read_markdown
+        "yuxi.repositories.document_review_repository.DocumentReviewRepository.approved_revision", read_markdown
     )
     kb._split_text_into_chunks = lambda text, file_id, filename, params: chunks
     kb._get_embedding_function = lambda embedding_model_spec: embedding_function
@@ -409,7 +409,7 @@ async def test_cancellation_marks_file_retryable(monkeypatch, operation, expecte
         kb._get_or_create_milvus_collection = get_collection
         kb._get_embedding_function = lambda embedding_model_spec: None
         monkeypatch.setattr(
-            "yuxi.repositories.document_review_repository.DocumentReviewRepository.approved_content", cancelled_step
+            "yuxi.repositories.document_review_repository.DocumentReviewRepository.approved_revision", cancelled_step
         )
 
         async def get_system_options(_option, _db=None):

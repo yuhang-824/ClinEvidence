@@ -37,9 +37,15 @@ test('未保存修订不能审核或入库；保存后审核最新版本；失�
       else record.revisions.at(-1).approved_at = '2026-09-18'
       return structuredClone(record)
     },
-    indexDocuments: async () => calls.push('index')
+    previewDocumentChunks: async (_kb, _file, payload) => ({
+      version: payload.version,
+      chunks: [],
+      params: { review_version: payload.version, chunk_preset_id: 'mixed' }
+    }),
+    indexDocuments: async (_kb, _file, params) => calls.push({ index: params })
   }
   const server = await createServer({
+    optimizeDeps: { noDiscovery: true, include: [] },
     server: { middlewareMode: true, hmr: false },
     appType: 'custom',
     plugins: [
@@ -66,6 +72,7 @@ test('未保存修订不能审核或入库；保存后审核最新版本；失�
               /import \{ documentApi \} from '@\/apis\/knowledge_api'/,
               'const documentApi = globalThis.__reviewApi'
             )
+            .replace(/import SourceChunkCard from '[^']+'/, 'const SourceChunkCard = {}')
         }
       }
     ]
@@ -78,9 +85,15 @@ test('未保存修订不能审核或入库；保存后审核最新版本；失�
       createElement: node,
       createText: (text) => ({ ...node('text'), text }),
       createComment: () => node('comment'),
-      insert(child, parent) {
+      insert(child, parent, anchor = null) {
+        if (child.parent) {
+          const old = child.parent.children.indexOf(child)
+          if (old >= 0) child.parent.children.splice(old, 1)
+        }
         child.parent = parent
-        parent.children.push(child)
+        const index = anchor ? parent.children.indexOf(anchor) : -1
+        if (index >= 0) parent.children.splice(index, 0, child)
+        else parent.children.push(child)
       },
       remove(child) {
         child.parent.children.splice(child.parent.children.indexOf(child), 1)
@@ -93,7 +106,8 @@ test('未保存修订不能审核或入库；保存后审核最新版本；失�
         child.children = []
       },
       parentNode: (child) => child.parent,
-      nextSibling: () => null,
+      nextSibling: (child) =>
+        child.parent?.children[child.parent.children.indexOf(child) + 1] || null,
       patchProp(child, key, _old, value) {
         child.props[key] = value
       }
@@ -115,7 +129,9 @@ test('未保存修订不能审核或入库；保存后审核最新版本；失�
       'a-button',
       'a-radio-group',
       'a-radio-button',
-      'a-textarea'
+      'a-textarea',
+      'a-input-number',
+      'a-pagination'
     ]) {
       app.component(name, {
         setup:
@@ -138,7 +154,19 @@ test('未保存修订不能审核或入库；保存后审核最新版本；失�
     await button('审核通过').props.onClick()
     await flush()
     assert.equal(calls[1].version, 2)
+    assert.equal(button('切片入库').props.disabled, true)
+    await button('预览切片').props.onClick()
+    await flush()
     assert.equal(button('切片入库').props.disabled, false)
+    const sizeInput = find(root, (item) => item.type === 'a-input-number')
+    sizeInput.props['onUpdate:value'](128)
+    await flush()
+    assert.equal(button('切片入库').props.disabled, true)
+    await button('预览切片').props.onClick()
+    await flush()
+    await button('切片入库').props.onClick()
+    await flush()
+    assert.equal(calls[2].index.review_version, 2)
     fail = true
     editor().props['onUpdate:value']('keep my draft')
     await flush()

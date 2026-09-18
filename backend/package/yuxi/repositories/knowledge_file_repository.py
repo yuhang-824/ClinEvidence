@@ -805,6 +805,9 @@ class KnowledgeFileRepository:
                 revision = await latest_revision(session, file_id)
                 if revision is None or not revision.approved_at:
                     raise ReviewConflict("请先审核最新清洗稿，再执行入库")
+                expected = sanitized_data.get("processing_params", {}).get("review_version")
+                if expected is not None and expected != revision.version:
+                    raise ReviewConflict("预览版本已更新，请重新预览后入库")
             if parsed_revision is not None:
                 await add_parsed_revision(session, file_id, *parsed_revision, sanitized_data.get("updated_by"))
             if sanitized_data.get("status") == "indexed":

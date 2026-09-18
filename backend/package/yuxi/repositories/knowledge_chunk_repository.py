@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import delete, func, select, update
 
 from yuxi.storage.postgres.manager import pg_manager
-from yuxi.storage.postgres.models_knowledge import KnowledgeChunk
+from yuxi.storage.postgres.models_knowledge import KnowledgeChunk, KnowledgeDocumentRevision
 from yuxi.utils.datetime_utils import utc_isoformat
 
 SQL_IN_BATCH_SIZE = 10_000
@@ -20,6 +20,7 @@ class KnowledgeChunkRepository:
         "chunk_index",
         "content",
         "start_char_pos",
+        "source_metadata",
         "end_char_pos",
         "start_token_pos",
         "end_token_pos",
@@ -39,6 +40,41 @@ class KnowledgeChunkRepository:
         async with pg_manager.get_async_session_context() as session:
             result = await session.execute(select(KnowledgeChunk).where(KnowledgeChunk.chunk_id == chunk_id))
             return result.scalar_one_or_none()
+
+    async def read_source(self, kb_id: str, file_id: str, chunk_id: str, version: int) -> dict:
+        """来源与片段归属在同一数据库快照查询中核对。"""
+        async with pg_manager.get_async_session_context() as session:
+            row = (
+                await session.execute(
+                    select(KnowledgeChunk, KnowledgeDocumentRevision)
+                    .join(
+                        KnowledgeDocumentRevision,
+                        (KnowledgeDocumentRevision.file_id == KnowledgeChunk.file_id)
+                        & (
+                            KnowledgeDocumentRevision.version == KnowledgeChunk.source_metadata["revision"].as_integer()
+                        ),
+                    )
+                    .where(
+                        KnowledgeChunk.kb_id == kb_id,
+                        KnowledgeChunk.file_id == file_id,
+                        KnowledgeChunk.chunk_id == chunk_id,
+                    )
+                )
+            ).first()
+            if row is None:
+                raise LookupError("片段不存在或没有版本来源，请重新切片入库")
+            chunk, revision = row
+            if revision.version != version:
+                from yuxi.repositories.document_review_repository import ReviewConflict
+
+                raise ReviewConflict("片段已重新入库，请刷新片段列表后查看来源")
+            metadata = chunk.source_metadata
+            return {
+                "source_metadata": metadata,
+                "excerpts": [
+                    {**span, "text": revision.content[span["start"] : span["end"]]} for span in metadata["spans"]
+                ],
+            }
 
     async def list_by_file_id(self, file_id: str) -> list[KnowledgeChunk]:
         async with pg_manager.get_async_session_context() as session:

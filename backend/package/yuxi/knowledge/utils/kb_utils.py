@@ -42,6 +42,10 @@ def resolve_processing_params(
     """合并文件、请求中的 OCR 和分块参数。"""
 
     merged_params = sanitize_processing_params(merge_processing_params(file_processing_params, request_params)) or {}
+    # 预览版本只约束本次请求，不继承历史索引的版本条件。
+    merged_params.pop("review_version", None)
+    if request_params and "review_version" in request_params:
+        merged_params["review_version"] = request_params["review_version"]
     chunk_params = resolve_chunk_processing_params(
         kb_additional_params=kb_additional_params,
         file_processing_params=file_processing_params,

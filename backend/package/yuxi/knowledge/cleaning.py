@@ -130,9 +130,15 @@ def clean_document(raw: str) -> tuple[str, dict]:
                 "message": "未取得逐页边界，未自动删除重复页眉页脚；请核对 PDF 总页数和左右栏完整性。",
             }
         )
+    page_spans, offset = [], 0
+    if PAGE_BREAK in raw:
+        for number, page in enumerate(cleaned_pages, 1):
+            page_spans.append({"page": number, "start": offset, "end": offset + len(page)})
+            offset += len(page) + 2
     return "\n\n".join(cleaned_pages), {
         "version": 1,
         "page_count": len(pages),
+        "page_spans": page_spans,
         "changes": changes,
         "warnings": warnings,
     }

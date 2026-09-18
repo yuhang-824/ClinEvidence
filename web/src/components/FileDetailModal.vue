@@ -117,14 +117,13 @@
           <a-spin tip="正在加载分块内容..." />
         </div>
         <div v-else class="chunk-grid">
-          <div v-for="chunk in mappedChunks" :key="chunk.id" class="chunk-card">
-            <div class="chunk-card-header">
-              <span class="chunk-order">#{{ chunk.chunk_order_index }}</span>
-            </div>
-            <div class="chunk-card-content">
-              {{ chunk.content.replace(/\n+/g, ' ') }}
-            </div>
-          </div>
+          <SourceChunkCard
+            v-for="chunk in mappedChunks"
+            :key="chunk.id"
+            :chunk="chunk"
+            :kb-id="String(kbId)"
+            :file-id="String(fileId)"
+          />
         </div>
         <div v-if="!contentState.loading && mappedChunks.length === 0" class="empty-content">
           <p>{{ contentState.error || '暂无分块信息' }}</p>
@@ -156,6 +155,7 @@ import MarkdownPreview from '@/components/common/MarkdownPreview.vue'
 import FileTypeIcon from '@/components/common/FileTypeIcon.vue'
 import AgentFilePreview from '@/components/AgentFilePreview.vue'
 import DocumentReviewPanel from '@/components/knowledge/DocumentReviewPanel.vue'
+import SourceChunkCard from '@/components/knowledge/SourceChunkCard.vue'
 import { Download, ChevronDown, FileSearch, FileText, Rows3, X } from '@lucide/vue'
 
 const props = defineProps({

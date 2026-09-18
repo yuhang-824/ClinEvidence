@@ -6,6 +6,37 @@ from yuxi.repositories.document_review_repository import DocumentReviewRepositor
 from yuxi.storage.minio import get_minio_client
 
 
+async def preview_chunks(kb_id, file_id, *, version, chunk_token_num):
+    """预览已保存的确定版本，与索引使用同一结构切片器。"""
+    import asyncio
+
+    from yuxi.knowledge.chunking.mixed import chunk_mixed
+
+    data = await DocumentReviewRepository().read(kb_id, file_id)
+    revision = data["revisions"][-1] if data["revisions"] else None
+    if revision is None or revision["version"] != version:
+        raise ReviewConflict("文档版本已更新，请重新加载后预览")
+    chunks = await asyncio.to_thread(
+        chunk_mixed, revision["content"], file_id, "", {"chunk_token_num": chunk_token_num}, revision=revision
+    )
+    return {
+        "version": version,
+        "chunks": chunks,
+        "params": {
+            "chunk_preset_id": "mixed",
+            "chunk_parser_config": {"chunk_token_num": chunk_token_num},
+            "review_version": version,
+        },
+    }
+
+
+async def read_chunk_source(kb_id, file_id, chunk_id, version):
+    """回读片段所属版本的原段落。"""
+    from yuxi.repositories.knowledge_chunk_repository import KnowledgeChunkRepository
+
+    return await KnowledgeChunkRepository().read_source(kb_id, file_id, chunk_id, version)
+
+
 async def read_review(kb_id, file_id):
     """读取审核资料，不因查看而创建版本。"""
     result = await DocumentReviewRepository().read(kb_id, file_id)
