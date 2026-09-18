@@ -16,9 +16,7 @@
         <span v-if="current">{{ current.approved_at ? '已审核' : '待审核' }}</span>
         <span v-if="published">当前检索版本：{{ published.version }}</span>
         <a-button :disabled="dirty || busy || repairOpen" @click="load">重新加载</a-button>
-        <a-button v-if="dirty" :disabled="busy" @click="draft = current.content"
-          >撤销未保存修改</a-button
-        >
+        <a-button v-if="dirty" :disabled="busy" @click="discardDraft">撤销未保存修改</a-button>
         <a-button
           v-if="!latest"
           :disabled="!data.can_manage"
@@ -27,7 +25,11 @@
           >生成清洗稿</a-button
         >
         <template v-else>
-          <a-button :disabled="!editable || !dirty" :loading="busy" @click="act('save')"
+          <a-button
+            v-if="!current?.report.structure"
+            :disabled="!editable || !dirty"
+            :loading="busy"
+            @click="act('save')"
             >保存修订</a-button
           >
           <a-button
@@ -50,6 +52,18 @@
       </p>
       <a-alert v-if="actionError && !repairOpen" :message="actionError" type="error" show-icon />
       <template v-if="current">
+        <StructuredDocumentReview
+          ref="structureEditor"
+          v-if="current.report.structure"
+          :key="`${current.version}-${structureReset}`"
+          :structure="current.report.structure"
+          :kb-id="kbId"
+          :file-id="fileId"
+          :version="current.version"
+          :editable="editable && !repairOpen"
+          @dirty-change="structuredDirty = $event"
+          @save="saveStructure"
+        />
         <div class="chunk-preview-controls">
           <strong>混合材料切片</strong>
           <label
@@ -133,7 +147,7 @@
             <pre>{{ change.after || '已移除' }}</pre>
           </div>
         </details>
-        <div class="review-columns">
+        <div v-if="!current.report.structure" class="review-columns">
           <section>
             <a-radio-group v-model:value="sourceMode" button-style="solid">
               <a-radio-button value="text">原始解析</a-radio-button>
@@ -171,6 +185,7 @@ import { message } from 'ant-design-vue'
 import { documentApi } from '@/apis/knowledge_api'
 import ChunkRepairEditor from '@/components/knowledge/ChunkRepairEditor.vue'
 import SourceChunkCard from '@/components/knowledge/SourceChunkCard.vue'
+import StructuredDocumentReview from '@/components/knowledge/StructuredDocumentReview.vue'
 
 const props = defineProps({
   kbId: { type: String, required: true },
@@ -184,6 +199,9 @@ const actionError = ref('')
 const data = ref({ revisions: [] })
 const selected = ref(null)
 const draft = ref('')
+const structuredDirty = ref(false)
+const structureEditor = ref(null)
+const structureReset = ref(0)
 const sourceMode = ref('text')
 const chunkSize = ref(512)
 const preview = ref(null)
@@ -208,7 +226,9 @@ const editable = computed(
     !['parsing', 'indexing'].includes(data.value.file_status) &&
     !busy.value
 )
-const dirty = computed(() => !!current.value && draft.value !== current.value.content)
+const dirty = computed(
+  () => structuredDirty.value || (!!current.value && draft.value !== current.value.content)
+)
 watch([dirty, repairOpen], ([changed, repairing]) => emit('dirty-change', changed || repairing))
 onBeforeUnmount(() => emit('dirty-change', false))
 const versionOptions = computed(() =>
@@ -224,7 +244,31 @@ const rawContent = computed(
 )
 watch(current, (value) => {
   draft.value = value?.content || ''
+  structuredDirty.value = false
 })
+function discardDraft() {
+  draft.value = current.value.content
+  structuredDirty.value = false
+  structureReset.value++
+}
+async function saveStructure(structure) {
+  busy.value = true
+  actionError.value = ''
+  try {
+    accept(
+      await documentApi.changeDocumentReview(props.kbId, props.fileId, {
+        action: 'save',
+        version: current.value.version,
+        structure
+      })
+    )
+    message.success('结构修订与逐页核验已保存，批准前请完成全部页面核验')
+  } catch (e) {
+    actionError.value = e.message || '保存失败，修订内容已保留'
+  } finally {
+    busy.value = false
+  }
+}
 watch([draft, selected, chunkSize], () => {
   previewRequestId++
   preview.value = null
@@ -256,6 +300,13 @@ async function saveBoundaries(boundaries) {
 async function locateSource(position) {
   repairOpen.value = false
   await nextTick()
+  if (current.value.report.structure) {
+    const block = current.value.report.block_spans.find(
+      (b) => b.start <= position && b.end > position
+    )
+    if (block) await structureEditor.value?.locateBlock(block.id)
+    return
+  }
   const editor = document.getElementById('review-content')
   const offset = Array.from(current.value.content).slice(0, position).join('').length
   editor?.focus()

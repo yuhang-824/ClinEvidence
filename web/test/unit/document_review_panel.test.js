@@ -85,6 +85,10 @@ test('未保存修订不能审核或入库；保存后审核最新版本；失�
             inlineTemplate: true
           })
             .content.replace(
+              /import StructuredDocumentReview from '[^']+'/,
+              'const StructuredDocumentReview = { render() { return null } }'
+            )
+            .replace(
               /from '@\/components\/knowledge\/ChunkRepairEditor.vue'/,
               "from 'virtual:repair-editor'"
             )

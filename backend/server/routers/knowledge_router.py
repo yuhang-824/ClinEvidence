@@ -7,7 +7,7 @@ import traceback
 from urllib.parse import quote, unquote
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, StrictInt
 from starlette.responses import StreamingResponse
 from yuxi.config.options import system_options
@@ -132,7 +132,9 @@ media_types = {
 
 
 async def _delete_document_storage_objects(kb_id: str, doc_id: str, file_path: str) -> None:
+    """删除原件、预览和该文件各解析版本的结构对象。"""
     minio_client = get_minio_client()
+    await minio_client.adelete_objects_by_prefix(minio_client.KB_BUCKETS["parsed"], f"{kb_id}/structure/{doc_id}/")
 
     if is_minio_url(file_path):
         try:
@@ -904,6 +906,7 @@ class DocumentReviewInput(BaseModel):
     version: int = Field(ge=0)
     content: str | None = Field(default=None, max_length=2_000_000)
     boundaries: list[StrictInt] | None = Field(default=None, max_length=10000)
+    structure: dict | None = None
 
 
 class ChunkPreviewInput(BaseModel):
@@ -911,6 +914,29 @@ class ChunkPreviewInput(BaseModel):
 
     version: int = Field(ge=1)
     chunk_token_num: int = Field(default=512, ge=64, le=4096)
+
+
+@knowledge.get("/databases/{kb_id}/documents/{doc_id}/review/source")
+async def get_review_source(
+    kb_id: str,
+    doc_id: str,
+    version: int = Query(ge=1),
+    page: int | None = Query(default=None, ge=1),
+    current_user: User = Depends(require_knowledge_base_read),
+):
+    """按审核版本读取结构原件或源 PDF 页图。"""
+    from yuxi.repositories.document_review_repository import ReviewConflict
+    from yuxi.services.document_review_service import read_structure_artifact
+
+    try:
+        data = await read_structure_artifact(kb_id, doc_id, version, page)
+        return Response(
+            data, media_type="image/png" if page else "application/json", headers={"Cache-Control": "private, no-store"}
+        )
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ReviewConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @knowledge.post("/databases/{kb_id}/documents/{doc_id}/chunk-preview")
@@ -973,7 +999,11 @@ async def change_document_review(
     from yuxi.repositories.document_review_repository import ReviewConflict
     from yuxi.services.document_review_service import change_review
 
-    if payload.action == "save" and (payload.content is None or not payload.content.strip()):
+    if (
+        payload.action == "save"
+        and payload.structure is None
+        and (payload.content is None or not payload.content.strip())
+    ):
         raise HTTPException(400, "修订内容不能为空")
     try:
         result = await change_review(
@@ -983,6 +1013,7 @@ async def change_document_review(
             version=payload.version,
             content=payload.content,
             boundaries=payload.boundaries,
+            structure=payload.structure,
             operator=current_user.uid,
         )
         result["can_manage"] = True

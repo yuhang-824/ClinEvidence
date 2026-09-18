@@ -6,6 +6,7 @@ x-api-worker-env: &api-worker-env
   JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env.prod}
   API_KEY_DERIVATION_SECRET: ${API_KEY_DERIVATION_SECRET:?Set API_KEY_DERIVATION_SECRET in .env.prod}
   RAPIDOCR_MODEL_DIR: /home/yuxi/.cache/rapidocr/models
+  DOCLING_ARTIFACTS_PATH: /home/yuxi/.cache/docling/models
   YUXI_INSTANCE_ID: ${YUXI_INSTANCE_ID:?Set YUXI_INSTANCE_ID in .env.prod}
   POSTGRES_URL: ${POSTGRES_URL:-postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.prod}@postgres:5432/${POSTGRES_DB:-yuxi}}
   REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -49,6 +50,7 @@ services:
     networks:
       - app-network
     volumes:
+      - ${YUXI_DOCLING_MODEL_DIR:-./docker/volumes/docling-models}:/home/yuxi/.cache/docling/models:ro
       - ${YUXI_STATE_DIR:-./docker/volumes}/yuxi/threads:/app/user-data
       - ${YUXI_STATE_DIR:-./docker/volumes}/yuxi/skill-sources:/app/skill-sources
       - ${YUXI_STATE_DIR:-./docker/volumes}/yuxi/skill-projections:/app/skill-projections
@@ -98,6 +100,7 @@ services:
     networks:
       - app-network
     volumes:
+      - ${YUXI_DOCLING_MODEL_DIR:-./docker/volumes/docling-models}:/home/yuxi/.cache/docling/models:ro
       - ${YUXI_STATE_DIR:-./docker/volumes}/yuxi/threads:/app/user-data
       - ${YUXI_STATE_DIR:-./docker/volumes}/yuxi/skill-sources:/app/skill-sources
       - ${YUXI_STATE_DIR:-./docker/volumes}/yuxi/skill-projections:/app/skill-projections

@@ -156,7 +156,7 @@ import FileTypeIcon from '@/components/common/FileTypeIcon.vue'
 import AgentFilePreview from '@/components/AgentFilePreview.vue'
 import DocumentReviewPanel from '@/components/knowledge/DocumentReviewPanel.vue'
 import SourceChunkCard from '@/components/knowledge/SourceChunkCard.vue'
-import { Download, ChevronDown, FileSearch, FileText, Rows3, X } from '@lucide/vue'
+import { Download, ChevronDown, ClipboardCheck, FileSearch, FileText, Rows3, X } from '@lucide/vue'
 
 const props = defineProps({
   open: {
@@ -346,7 +346,7 @@ const viewModeOptions = computed(() => {
   const optionMap = {
     source: makeViewModeOption('源文件', 'source', FileSearch),
     markdown: makeViewModeOption('Markdown', 'markdown', FileText),
-    review: { label: '清洗与审核', value: 'review' },
+    review: makeViewModeOption('清洗与审核', 'review', ClipboardCheck),
     chunks: makeViewModeOption('Chunks', 'chunks', Rows3)
   }
   return availableViewModes.value.map((mode) => optionMap[mode])

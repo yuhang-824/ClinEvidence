@@ -1,6 +1,7 @@
 """真实 PostgreSQL 验证审核、索引与编辑的文件锁边界。"""
 
 import asyncio
+from datetime import datetime, UTC
 
 import pytest
 from sqlalchemy import select, text
@@ -11,8 +12,62 @@ from yuxi.repositories import document_review_repository, knowledge_file_reposit
 from yuxi.repositories.document_review_repository import DocumentReviewRepository, ReviewConflict
 from yuxi.repositories.knowledge_file_repository import KnowledgeFileRepository
 from yuxi.storage.postgres.models_knowledge import KnowledgeBase, KnowledgeDocumentRevision, KnowledgeFile
+from yuxi.knowledge.structure import structure_report
+from test.unit.knowledge.test_structured_pdf_review import sample, payload
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+
+
+async def test_structured_review_blocks_bypass_and_invalidates_approval(monkeypatch):
+    """真实事务证明原页未核验不能审批，修订后旧审批和旧预览失效。"""
+    schema, admin, engine, manager = await _create_isolated_manager("pytest_structure")
+    manager.AsyncSession = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        await manager.create_knowledge_tables()
+        monkeypatch.setattr(document_review_repository, "pg_manager", manager)
+        monkeypatch.setattr(knowledge_file_repository, "pg_manager", manager)
+        async with manager.get_async_session_context() as session:
+            session.add(KnowledgeBase(kb_id="kb", name="fixture", kb_type="milvus"))
+            await session.flush()
+            session.add(
+                KnowledgeFile(file_id="file", kb_id="kb", filename="f.pdf", status="parsed", markdown_file="original")
+            )
+        repo, files = DocumentReviewRepository(), KnowledgeFileRepository()
+        source = sample()
+        content, report = structure_report(source)
+        await repo.write("kb", "file", version=0, operator="parser", initial=("original", content, report))
+        with pytest.raises(ValueError, match="尚未完成"):
+            await repo.write("kb", "file", version=1, operator="editor", approve=True)
+        with pytest.raises(ReviewConflict, match="结构审核"):
+            await repo.write("kb", "file", version=1, operator="editor", content="bypass")
+        await repo.write("kb", "file", version=1, operator="editor", structure=payload(source))
+        await repo.write("kb", "file", version=2, operator="editor", approve=True)
+        assert (await repo.approved_revision("kb", "file"))["version"] == 2
+        changed = payload(source)
+        changed["blocks"][1]["text"] = "修改对应关系"
+        changed["pages"][0]["checks"]["relationships"] = False
+        await repo.write("kb", "file", version=2, operator="editor", structure=changed)
+        rows = (await repo.read("kb", "file"))["revisions"]
+        assert rows[-1]["approved_at"] is None
+        assert rows[0]["raw_content"] == "original"
+        assert rows[-1]["report"]["structure"]["blocks"][1]["source_text"] == "immutable"
+        with pytest.raises(ReviewConflict, match="审核"):
+            await files.update_fields_if_status(
+                kb_id="kb", file_id="file", allowed_statuses={"parsed"}, data={"status": "indexing"}
+            )
+        # 即使审批字段被旧逻辑错误写入，索引入口仍执行结构核验。
+        async with manager.get_async_session_context() as session:
+            row = await session.scalar(select(KnowledgeDocumentRevision).where(KnowledgeDocumentRevision.version == 3))
+            row.approved_at = datetime.now(UTC)
+        with pytest.raises(ValueError, match="尚未完成"):
+            await files.update_fields_if_status(
+                kb_id="kb",
+                file_id="file",
+                allowed_statuses={"parsed"},
+                data={"status": "indexing", "processing_params": {"review_version": 3}},
+            )
+    finally:
+        await _drop_isolated_schema(schema, admin, engine)
 
 
 @pytest.fixture(scope="session", autouse=True)
