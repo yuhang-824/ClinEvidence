@@ -2,7 +2,7 @@
 
 状态：proposed
 类型：architecture
-Owner：backend/package/yuxi/services/conversation_service.py（会话绑定）、患者通道工具契约（M6 实施时注册）；分工见提案第 9 条
+Owner：backend/package/yuxi/services/conversation_service.py
 
 ## 问题
 
