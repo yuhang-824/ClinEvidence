@@ -75,7 +75,19 @@ class DocumentReviewRepository:
                 ],
             }
 
-    async def write(self, kb_id, file_id, *, version, operator, content=None, initial=None, approve=False):
+    async def write(
+        self,
+        kb_id,
+        file_id,
+        *,
+        version,
+        operator,
+        content=None,
+        initial=None,
+        approve=False,
+        repair=False,
+        boundaries=None,
+    ):
         """拒绝陈旧版本和处理中编辑，审核只作用于已保存的最新版本。"""
         async with pg_manager.get_async_session_context() as session:
             file = await session.scalar(
@@ -103,17 +115,27 @@ class DocumentReviewRepository:
                 if not latest.approved_at:
                     latest.approved_by, latest.approved_at = operator, utc_now()
             else:
+                report = {
+                    "version": 1,
+                    "changes": [],
+                    "warnings": latest.report.get("warnings", []),
+                    "manual": True,
+                }
+                if repair:
+                    from yuxi.knowledge.chunking.mixed import chunk_mixed
+
+                    content = latest.content
+                    report = {**latest.report}
+                    report.pop("chunk_boundaries", None)
+                    if boundaries is not None:
+                        report["chunk_boundaries"] = boundaries
+                    chunk_mixed(content, file_id, "", {}, revision={"version": version + 1, "report": report})
                 session.add(
                     KnowledgeDocumentRevision(
                         file_id=file_id,
                         version=version + 1,
                         content=content,
-                        report={
-                            "version": 1,
-                            "changes": [],
-                            "warnings": latest.report.get("warnings", []),
-                            "manual": True,
-                        },
+                        report=report,
                         created_by=operator,
                     )
                 )

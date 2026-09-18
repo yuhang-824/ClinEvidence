@@ -701,7 +701,9 @@ class MilvusKB(KnowledgeBase):
             markdown_content = revision["content"]
             filename = file_meta.get("filename")
 
-            # Split
+            # 已审核人工边界属于文档版本，所有索引入口均须遵守。
+            if revision.get("report", {}).get("chunk_boundaries") is not None:
+                params["chunk_preset_id"] = "mixed"
             if params.get("chunk_preset_id") == "mixed":
                 from yuxi.knowledge.chunking.mixed import chunk_mixed
 

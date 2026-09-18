@@ -10,6 +10,8 @@ Owner：backend/package/yuxi/knowledge/chunking/mixed.py
 
 ## 决策
 
+字段识别与人工修复由[切片边界修复](2026-09-18-chunk-repair.md)补充；仅验证字符覆盖不构成完整语义验证。
+
 新增显式 mixed 策略，清洗审核页提供该策略的预览入口。Markdown 章节作为上下文，长表按完整行拆分并重复表名、表头，字段组与推荐意见保持完整；英文普通正文按句切分，逐行空行正文按预算组合，未完句不硬拆。超长完整单元显示提示，超出存储上限时拒绝并要求人工分段。数字行不推断为标题，避免将剂量或时长错误附加到后续片段；章节不明确时由审核者补充 Markdown 标记。
 
 清洗报告拥有可靠解析页边界；人工修订版本不继承 PDF 页码，但保留审核稿字符和行位置。KnowledgeChunk.source_metadata 保存结构、版本、正文和重复上下文的位置，storage-migrator 幂等升级知识 Schema 到 4，历史片段保持 nullable 来源。Milvus 返回结果经 PostgreSQL 核对归属及内容后附加来源信息。

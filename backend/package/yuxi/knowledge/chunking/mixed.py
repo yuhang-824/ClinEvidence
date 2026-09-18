@@ -26,6 +26,17 @@ def heading_level(line: str) -> int:
     return 1 if line.strip() in {"参考文献", "References"} else 0
 
 
+def validate_boundaries(text: str, boundaries: list[int]) -> None:
+    """人工切点必须严格递增且每段都有正文，不能删除或重复原文。"""
+    if len(boundaries) > 10000:
+        raise ValueError("人工切点不能超过 10000 个")
+    previous = 0
+    for point in [*boundaries, len(text)]:
+        if type(point) is not int or not previous < point <= len(text) or not text[previous:point].strip():
+            raise ValueError("切点须严格递增、位于正文内部，每个片段须有非空内容")
+        previous = point
+
+
 def chunk_mixed(text: str, file_id: str, filename: str, config: dict, *, revision=None) -> list[dict]:
     """保护结构单元并记录正文与重复上下文各自的字符位置。"""
     budget = int(config.get("chunk_token_num", 512))
@@ -37,8 +48,35 @@ def chunk_mixed(text: str, file_id: str, filename: str, config: dict, *, revisio
         offsets.append(offset)
         offset += len(line)
     offsets.append(len(text))
-    chunks, headings = [], []
+    chunks, headings, table_headers = [], [], []
     page_spans = (revision or {}).get("report", {}).get("page_spans", [])
+
+    def is_field(index):
+        """冒号不是字段的充分证据，未完正文与跨行长值优先保持为段落。"""
+        match = FIELD.match(lines[index])
+        if not match:
+            return False
+        previous = index - 1
+        while previous >= 0 and not lines[previous].strip():
+            previous -= 1
+        if previous >= 0:
+            prior = lines[previous].strip()
+            if not (FIELD.match(prior) or heading_level(prior) or SENTENCE_END.search(prior) or TABLE.match(prior)):
+                return False
+        value = lines[index][match.end() :].strip()
+        following = index + 1
+        while following < len(lines) and not lines[following].strip():
+            following += 1
+        if value and following < len(lines):
+            next_text = lines[following]
+            if not (
+                FIELD.match(next_text)
+                or heading_level(next_text)
+                or TABLE.match(next_text)
+                or RECOMMENDATION.match(next_text)
+            ) and not SENTENCE_END.search(value):
+                return False
+        return not re.search(r"[，。；！？,;!?]", value) and len(value) <= 60
 
     def emit(start, end, kind, extra=()):
         """生成含上下文、可回读来源与质量提示的单一片段。"""
@@ -69,7 +107,8 @@ def chunk_mixed(text: str, file_id: str, filename: str, config: dict, *, revisio
         spans += [{"start": a, "end": b, "role": "context"} for a, b in extra]
         spans.append({"start": start, "end": end, "role": "body"})
         content = "\n\n".join(text[s["start"] : s["end"]].strip() for s in spans)
-        if len(content.encode("utf-8")) > 60000:
+        manual_plan = (revision or {}).get("report", {}).get("chunk_boundaries")
+        if len(content.encode("utf-8")) > 60000 and (manual_plan is None or kind == "manual"):
             raise ValueError("存在超过存储上限的完整结构块，请在清洗稿中人工分段后重新预览")
         pages = sorted({p["page"] for p in page_spans if p["start"] < end and p["end"] > start})
         metadata = {
@@ -136,15 +175,26 @@ def chunk_mixed(text: str, file_id: str, filename: str, config: dict, *, revisio
                 emit(offsets[begin], offsets[i], "table")
                 continue
             header = (offsets[begin], offsets[header_end])
+            table_headers.append((header[0], header[1], offsets[i]))
             row_start = header_end
             for row in range(header_end, i):
                 if (
                     row > row_start
                     and count_tokens(text[header[0] : header[1]] + text[offsets[row_start] : offsets[row + 1]]) > budget
                 ):
-                    emit(offsets[row_start], offsets[row], "table", [header])
+                    emit(
+                        offsets[begin] if row_start == header_end else offsets[row_start],
+                        offsets[row],
+                        "table",
+                        [] if row_start == header_end else [header],
+                    )
                     row_start = row
-            emit(offsets[row_start], offsets[i], "table", [header])
+            emit(
+                offsets[begin] if row_start == header_end else offsets[row_start],
+                offsets[i],
+                "table",
+                [] if row_start == header_end else [header],
+            )
             continue
         if line.lstrip().startswith(("```", "~~~", "<table")):
             fence = line.lstrip()[:3]
@@ -156,7 +206,7 @@ def chunk_mixed(text: str, file_id: str, filename: str, config: dict, *, revisio
                     break
             emit(offsets[begin], offsets[i], "table" if fence == "<ta" else "code")
             continue
-        kind = "recommendation" if RECOMMENDATION.match(line) else "form" if FIELD.match(line) else "paragraph"
+        kind = "recommendation" if RECOMMENDATION.match(line) else "form" if is_field(i) else "paragraph"
         i += 1
         while i < len(lines):
             following = lines[i]
@@ -172,7 +222,9 @@ def chunk_mixed(text: str, file_id: str, filename: str, config: dict, *, revisio
                     break
             if not following.strip() and kind != "recommendation":
                 previous_text = text[offsets[begin] : offsets[i]].rstrip()
-                if kind != "form" or not previous_text.endswith((":", "：")):
+                unfinished_prose = kind == "paragraph" and not SENTENCE_END.search(previous_text)
+                empty_field = kind == "form" and previous_text.endswith((":", "："))
+                if not (unfinished_prose or empty_field):
                     break
             if heading_level(following) or TABLE.match(following) or RECOMMENDATION.match(following):
                 break
@@ -180,7 +232,7 @@ def chunk_mixed(text: str, file_id: str, filename: str, config: dict, *, revisio
                 break
             if CAPTION.match(following):
                 break
-            if kind == "paragraph" and FIELD.match(following):
+            if kind == "paragraph" and is_field(i):
                 break
             i += 1
         start, end = offsets[begin], offsets[i]
@@ -204,4 +256,31 @@ def chunk_mixed(text: str, file_id: str, filename: str, config: dict, *, revisio
     if not chunks and text.strip():
         headings = []
         emit(0, len(text), "paragraph")
+    boundaries = (revision or {}).get("report", {}).get("chunk_boundaries")
+    if boundaries is not None:
+        validate_boundaries(text, boundaries)
+        automatic, chunks = chunks, []
+        for start, end in zip([0, *boundaries], [*boundaries, len(text)]):
+            headings = []
+            for n, line in enumerate(lines):
+                level = heading_level(line)
+                if offsets[n] >= start:
+                    break
+                if level and offsets[n + 1] <= start:
+                    headings = [h for h in headings if h[0] < level]
+                    headings.append((level, offsets[n], offsets[n + 1]))
+            # 人工拆分长表时沿用覆盖起点的表头；位于正文内的上下文无需重复。
+            owner = next((c for c in automatic if c["start_char_pos"] <= start < c["end_char_pos"]), None)
+            contexts = (owner or {}).get("source_metadata", {}).get("spans", [])
+            extra = [
+                (s["start"], s["end"])
+                for s in contexts
+                if s["role"] == "context"
+                and s["end"] <= start
+                and (s["start"], s["end"]) not in [(a, b) for _, a, b in headings]
+            ]
+            for table_start, header_end, table_end in table_headers:
+                if header_end <= start < table_end and (table_start, header_end) not in extra:
+                    extra.append((table_start, header_end))
+            emit(start, end, "manual", extra)
     return chunks

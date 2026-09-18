@@ -182,3 +182,38 @@ async def test_replaced_chunk_rejects_old_source_version(monkeypatch):
             await repo.read_source("other", "file", second["id"], 2)
     finally:
         await _drop_isolated_schema(schema, admin, engine)
+
+
+async def test_boundary_revision_preserves_pages_resets_approval_and_automatic(monkeypatch):
+    """只改边界保留页码，新版本需审核；恢复自动和正文编辑清除人工方案。"""
+    schema, admin, engine, manager = await _create_isolated_manager("pytest_boundary_review")
+    manager.AsyncSession = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        await manager.create_knowledge_tables()
+        monkeypatch.setattr(document_review_repository, "pg_manager", manager)
+        async with manager.get_async_session_context() as session:
+            session.add(KnowledgeBase(kb_id="kb", name="fixture", kb_type="milvus"))
+            await session.flush()
+            session.add(
+                KnowledgeFile(file_id="file", kb_id="kb", filename="f.pdf", status="parsed", markdown_file="original")
+            )
+        repo = DocumentReviewRepository()
+        report = {"page_spans": [{"page": 1, "start": 0, "end": 8}], "warnings": []}
+        await repo.write("kb", "file", version=0, operator="editor", initial=("raw", "第一句。第二句。", report))
+        await repo.write("kb", "file", version=1, operator="editor", approve=True)
+        await repo.write("kb", "file", version=1, operator="editor", repair=True, boundaries=[4])
+        versions = (await repo.read("kb", "file"))["revisions"]
+        assert versions[-1]["content"] == versions[0]["content"]
+        assert versions[-1]["report"]["page_spans"] == report["page_spans"]
+        assert versions[-1]["approved_at"] is None
+        with pytest.raises(ValueError, match="切点"):
+            await repo.write("kb", "file", version=2, operator="editor", repair=True, boundaries=[8])
+        assert len((await repo.read("kb", "file"))["revisions"]) == 2
+        await repo.write("kb", "file", version=2, operator="editor", repair=True, boundaries=None)
+        latest = (await repo.read("kb", "file"))["revisions"][-1]
+        assert "chunk_boundaries" not in latest["report"]
+        assert latest["report"]["page_spans"] == report["page_spans"]
+        await repo.write("kb", "file", version=3, operator="editor", content="修改后正文。")
+        assert "page_spans" not in (await repo.read("kb", "file"))["revisions"][-1]["report"]
+    finally:
+        await _drop_isolated_schema(schema, admin, engine)

@@ -151,3 +151,70 @@ def test_numbered_text_does_not_turn_recommendation_dose_into_title(dose):
     assert dose in rec["content"] and "only to eligible adults." in rec["content"]
     assert "2 Treatment" not in rec["content"]
     assert all(dose not in c["source_metadata"]["section"] for c in chunks)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "DESKTOP-Ⅰ试验探索并建立了\n\nAGO评分阳性标准：ECOG 0分，初次手术无肉眼残留病灶\n\n（R0）切除，无腹水或腹水≤500mL。",
+        "入选标\n\n准包括：PFI超过6个月；初始治疗接受含铂化疗时，需在最\n\n后3个疗程化疗时达到完全缓解。",
+        "该试验同时探\n\n索性研究了两个问题：（1）手术能否给患者带来\n\n生存获益。（2）联合方案的疗效。",
+        "符合条件时可以\n\n考虑实施SCS：（1）初次化疗结束后超过６个月。（2）患者一\n\n般情况好。（3）无腹水。",
+    ],
+)
+def test_wrapped_prose_colons_do_not_create_incomplete_form_fragments(text):
+    """实际缺陷形态：冒号附近的跨行句子必须同片，不只验证字数。"""
+    chunks = chunk_mixed(text, "f", "f.pdf", {"chunk_token_num": 64})
+    assert len(chunks) == 1
+    assert chunks[0]["content"] == text
+    assert chunks[0]["source_metadata"]["kind"] == "paragraph"
+
+
+def test_manual_boundaries_partition_unicode_and_keep_version_source():
+    """人工合并拆分使用 Unicode 字符，正文恰好覆盖一次并回指版本。"""
+    text = "# 标题\n\n第一句😀。\n\n第二句。"
+    cut = text.index("第二")
+    revision = {
+        "version": 3,
+        "report": {"chunk_boundaries": [cut], "page_spans": [{"page": 1, "start": 0, "end": len(text)}]},
+    }
+    chunks = chunk_mixed(text, "f", "f.pdf", {}, revision=revision)
+    assert len(chunks) == 2
+    assert chunks[0]["content"] == text[:cut].strip()
+    assert chunks[1]["content"] == "# 标题\n\n第二句。"
+    assert all(c["source_metadata"]["revision"] == 3 for c in chunks)
+    assert all(c["source_metadata"]["pages"] == [1] for c in chunks)
+    assert all(c["source_metadata"]["kind"] == "manual" for c in chunks)
+
+
+@pytest.mark.parametrize("cuts", [[0], [20], [5, 5], [6, 3], [True], [2]])
+def test_invalid_manual_boundaries_fail(cuts):
+    """乱序、越界和空白片段不能保存为人工方案。"""
+    with pytest.raises(ValueError, match="切点"):
+        chunk_mixed("  abcdef", "f", "f.pdf", {}, revision={"report": {"chunk_boundaries": cuts}})
+
+
+def test_short_colon_value_with_continuation_is_prose():
+    """独立段落开头的冒号也不能截断后面的条件。"""
+    text = "前一段已结束。\n\n入选标准：PFI超过6个月\n\n且初始治疗接受含铂化疗。"
+    chunks = chunk_mixed(text, "f", "f.pdf", {})
+    assert any("入选标准：PFI超过6个月\n\n且初始治疗接受含铂化疗。" in c["content"] for c in chunks)
+    assert all(c["source_metadata"]["kind"] != "form" for c in chunks)
+
+
+def test_manual_split_small_table_repeats_header():
+    """自动仅一片的小表，人工拆行后每片仍有表头。"""
+    text = "表1 用药\n| 药物 | 剂量 |\n| --- | --- |\n| A | 5 mg |\n| B | 10 mg |"
+    chunks = chunk_mixed(text, "f", "f.pdf", {}, revision={"report": {"chunk_boundaries": [text.index("| B")]}})
+    assert len(chunks) == 2
+    assert all("| 药物 | 剂量 |" in c["content"] for c in chunks)
+    assert "| A | 5 mg |" not in chunks[1]["content"]
+
+
+def test_manual_can_split_oversized_structure():
+    """已存在的超大结构仍可通过人工切点修复。"""
+    text = "病史：" + "字" * 22000
+    chunks = chunk_mixed(text, "f", "f.pdf", {}, revision={"report": {"chunk_boundaries": [11000]}})
+    assert len(chunks) == 2
+    with pytest.raises(ValueError, match="存储上限"):
+        chunk_mixed(text, "f", "f.pdf", {}, revision={"report": {"chunk_boundaries": []}})

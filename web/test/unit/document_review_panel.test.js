@@ -27,11 +27,16 @@ test('未保存修订不能审核或入库；保存后审核最新版本；失�
     changeDocumentReview: async (_kb, _file, payload) => {
       calls.push(payload)
       if (fail) throw new Error('版本冲突')
-      if (payload.action === 'save')
+      if (payload.action === 'save' || payload.action === 'boundaries')
         record.revisions.push({
           ...record.revisions.at(-1),
-          version: 2,
-          content: payload.content,
+          version: record.revisions.at(-1).version + 1,
+          content: payload.content ?? record.revisions.at(-1).content,
+          approved_at: null,
+          report:
+            payload.action === 'boundaries'
+              ? { chunk_boundaries: payload.boundaries === null ? null : [...payload.boundaries] }
+              : {},
           raw_content: null
         })
       else record.revisions.at(-1).approved_at = '2026-09-18'
@@ -39,7 +44,11 @@ test('未保存修订不能审核或入库；保存后审核最新版本；失�
     },
     previewDocumentChunks: async (_kb, _file, payload) => ({
       version: payload.version,
-      chunks: [],
+      chunks: [0, ...(record.revisions.at(-1).report.chunk_boundaries ?? [3])].map((start, i) => ({
+        id: String(i),
+        start_char_pos: start,
+        content: record.revisions.at(-1).content.slice(start)
+      })),
       params: { review_version: payload.version, chunk_preset_id: 'mixed' }
     }),
     indexDocuments: async (_kb, _file, params) => calls.push({ index: params })
@@ -53,8 +62,19 @@ test('未保存修订不能审核或入库；保存后审核最新版本；失�
         name: 'review-component-test',
         resolveId(id) {
           if (id === 'virtual:review-test') return '\0' + id
+          if (id === 'virtual:repair-editor') return '\0virtual:repair-editor'
         },
         load(id) {
+          if (id === '\0virtual:repair-editor') {
+            const source = readFileSync(
+              new URL('../../src/components/knowledge/ChunkRepairEditor.vue', import.meta.url),
+              'utf8'
+            )
+            return compileScript(parse(source).descriptor, {
+              id: 'repair-editor',
+              inlineTemplate: true
+            }).content
+          }
           if (id !== '\0virtual:review-test') return
           const source = readFileSync(
             new URL('../../src/components/knowledge/DocumentReviewPanel.vue', import.meta.url),
@@ -65,6 +85,10 @@ test('未保存修订不能审核或入库；保存后审核最新版本；失�
             inlineTemplate: true
           })
             .content.replace(
+              /from '@\/components\/knowledge\/ChunkRepairEditor.vue'/,
+              "from 'virtual:repair-editor'"
+            )
+            .replace(
               /import \{ message \} from 'ant-design-vue'/,
               'const message = { success() {} }'
             )
@@ -72,7 +96,10 @@ test('未保存修订不能审核或入库；保存后审核最新版本；失�
               /import \{ documentApi \} from '@\/apis\/knowledge_api'/,
               'const documentApi = globalThis.__reviewApi'
             )
-            .replace(/import SourceChunkCard from '[^']+'/, 'const SourceChunkCard = {}')
+            .replace(
+              /import SourceChunkCard from '[^']+'/,
+              'const SourceChunkCard = { render() { return null } }'
+            )
         }
       }
     ]
@@ -131,7 +158,8 @@ test('未保存修订不能审核或入库；保存后审核最新版本；失�
       'a-radio-button',
       'a-textarea',
       'a-input-number',
-      'a-pagination'
+      'a-pagination',
+      'a-popconfirm'
     ]) {
       app.component(name, {
         setup:
@@ -167,6 +195,36 @@ test('未保存修订不能审核或入库；保存后审核最新版本；失�
     await button('切片入库').props.onClick()
     await flush()
     assert.equal(calls[2].index.review_version, 2)
+    await button('预览切片').props.onClick()
+    await flush()
+    await button('修复切片').props.onClick()
+    await flush()
+    assert.equal(button('切片入库').props.disabled, true)
+    assert.equal(button('在光标处拆分').props.disabled, true)
+    const boundaryEditor = find(root, (item) => item.type === 'textarea')
+    boundaryEditor.selectionStart = 1
+    boundaryEditor.props.onClick()
+    await flush()
+    assert.equal(button('在光标处拆分').props.disabled, false)
+    await button('在光标处拆分').props.onClick()
+    await flush()
+    assert.ok(text(root).includes('当前共 3 个片段'))
+    await button('与下一片段合并').props.onClick()
+    await flush()
+    assert.ok(text(root).includes('当前共 2 个片段'))
+    await button('与下一片段合并').props.onClick()
+    await flush()
+    fail = true
+    await button('保存切分修订').props.onClick()
+    await flush()
+    assert.ok(text(root).includes('当前共 1 个片段'))
+    assert.ok(find(root, (item) => item.props.message === '版本冲突'))
+    fail = false
+    await button('保存切分修订').props.onClick()
+    await flush()
+    assert.deepEqual(calls.at(-1).boundaries, [])
+    assert.equal(button('切片入库').props.disabled, true)
+    assert.equal(button('审核通过').props.disabled, false)
     fail = true
     editor().props['onUpdate:value']('keep my draft')
     await flush()

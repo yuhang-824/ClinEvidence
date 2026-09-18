@@ -44,7 +44,7 @@ async def read_review(kb_id, file_id):
     return result
 
 
-async def change_review(kb_id, file_id, *, action, version, operator, content=None):
+async def change_review(kb_id, file_id, *, action, version, operator, content=None, boundaries=None):
     """保留旧解析原文并按版本条件执行管理操作。"""
     repo = DocumentReviewRepository()
     initial = None
@@ -64,5 +64,7 @@ async def change_review(kb_id, file_id, *, action, version, operator, content=No
         content=content,
         initial=initial,
         approve=action == "approve",
+        repair=action == "boundaries",
+        boundaries=boundaries,
     )
     return await read_review(kb_id, file_id)

@@ -42,6 +42,7 @@ const error = ref('')
 const loading = ref(false)
 let requestId = 0
 const kindLabels = {
+  manual: '人工切分',
   table: '表格',
   form: '表单',
   recommendation: '推荐意见',

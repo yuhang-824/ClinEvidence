@@ -160,6 +160,23 @@ async def test_pdf_upload_parse_index_retrieve_delete_without_graph(tmp_path):
             assert (await client.post(preview_url, json={'version': 2, 'chunk_token_num': 0})).status_code == 422
             preview = await request('POST', preview_url, json={'version': 2, 'chunk_token_num': 64})
             assert preview['chunks'] and preview['params']['review_version'] == 2
+            for bad in ([0], [len(edited)], [5, 3], [True], [3.5]):
+                response = await client.post(review_url, json={'action': 'boundaries', 'version': 2, 'boundaries': bad})
+                assert response.status_code in {400, 422}, response.text
+            cut = edited.index('AUDITED CONTENT MARKER')
+            repaired = await request('POST', review_url, json={'action': 'boundaries', 'version': 2, 'boundaries': [cut]})
+            assert repaired['revisions'][-1]['version'] == 3
+            assert repaired['revisions'][-1]['content'] == edited
+            assert repaired['revisions'][-1]['approved_at'] is None
+            reloaded = await request('GET', review_url)
+            assert reloaded['revisions'][-1]['report']['chunk_boundaries'] == [cut]
+            assert (await client.post(review_url, json={'action': 'boundaries', 'version': 2, 'boundaries': []})).status_code == 409
+            await request('POST', review_url, json={'action': 'approve', 'version': 3})
+            preview = await request('POST', preview_url, json={'version': 3, 'chunk_token_num': 64})
+            assert len(preview['chunks']) == 2
+            assert preview['chunks'][-1]['content'] == 'AUDITED CONTENT MARKER'
+            # 原文件列表等非 mixed 入口也必须执行审核稿的人工边界。
+            preview['params']['chunk_preset_id'] = 'general'
             indexed = await request('POST', f'/api/knowledge/databases/{kb_id}/documents/index', json={'file_ids': [file_id], 'params': preview['params']})
             for _ in range(120):
                 task = (await request('GET', f"/api/tasks/{indexed['task_id']}"))['task']
@@ -173,11 +190,11 @@ async def test_pdf_upload_parse_index_retrieve_delete_without_graph(tmp_path):
                 assert 'AUDITED CONTENT MARKER' in '\n'.join(c.content for c in chunks)
                 chunks.sort(key=lambda c: c.chunk_index)
                 assert [c.content for c in chunks] == [c['content'] for c in preview['chunks']]
-                assert all(c.source_metadata['revision'] == 2 for c in chunks)
-            source_url = review_url.removesuffix('/review') + f'/chunks/{chunks[0].chunk_id}/source?version=2'
+                assert all(c.source_metadata['revision'] == 3 for c in chunks)
+            source_url = review_url.removesuffix('/review') + f'/chunks/{chunks[0].chunk_id}/source?version=3'
             source_before = await request('GET', source_url)
             assert '\n\n'.join(s['text'].strip() for s in source_before['excerpts']) == chunks[0].content
-            assert (await client.get(source_url.replace('version=2', 'version=1'))).status_code == 409
+            assert (await client.get(source_url.replace('version=3', 'version=1'))).status_code == 409
             assert (await client.get(source_url.replace(f'/documents/{file_id}/', '/documents/missing/'))).status_code == 404
             assert (await client.get(source_url.replace(kb_id, 'missing-kb'))).status_code in {403, 404}
             external = f'/api/knowledge/databases/external/{kb_id}/files/{file_id}'
@@ -185,7 +202,9 @@ async def test_pdf_upload_parse_index_retrieve_delete_without_graph(tmp_path):
             assert 'AUDITED CONTENT MARKER' in json.dumps(opened)
             found = await request('POST', external + '/find', json={'patterns': ['AUDITED CONTENT MARKER']})
             assert 'AUDITED CONTENT MARKER' in json.dumps(found)
-            await request('POST', review_url, json={'action': 'save', 'version': 2, 'content': 'UNPUBLISHED DRAFT'})
+            await request('POST', review_url, json={'action': 'save', 'version': 3, 'content': 'UNPUBLISHED DRAFT'})
+            pending = await request('GET', review_url)
+            assert 'chunk_boundaries' not in pending['revisions'][-1]['report']
             assert await request('GET', source_url) == source_before
             opened = await request('GET', external + '/open')
             assert 'AUDITED CONTENT MARKER' in json.dumps(opened) and 'UNPUBLISHED DRAFT' not in json.dumps(opened)
@@ -201,7 +220,7 @@ async def test_pdf_upload_parse_index_retrieve_delete_without_graph(tmp_path):
                     break
                 await asyncio.sleep(1)
             assert result['status'] == 'success' and 'ALPHA' in json.dumps(result)
-            assert any(c['metadata'].get('source_metadata', {}).get('revision') == 2 for c in result['result'])
+            assert any(c['metadata'].get('source_metadata', {}).get('revision') == 3 for c in result['result'])
             original = await client.get(f'/api/knowledge/databases/{kb_id}/documents/{file_id}/download')
             assert original.status_code == 200 and original.content == pdf.read_bytes()
             await request('DELETE', f'/api/knowledge/databases/{kb_id}')

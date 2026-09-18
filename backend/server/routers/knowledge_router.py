@@ -8,7 +8,7 @@ from urllib.parse import quote, unquote
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 from starlette.responses import StreamingResponse
 from yuxi.config.options import system_options
 from yuxi.knowledge.base import KBNameConflictError, KBNotFoundError
@@ -900,9 +900,10 @@ async def get_document_content(kb_id: str, doc_id: str, current_user: User = Dep
 class DocumentReviewInput(BaseModel):
     """使用显式版本防止覆盖他人修改。"""
 
-    action: str = Field(pattern="^(prepare|save|approve)$")
+    action: str = Field(pattern="^(prepare|save|approve|boundaries)$")
     version: int = Field(ge=0)
     content: str | None = Field(default=None, max_length=2_000_000)
+    boundaries: list[StrictInt] | None = Field(default=None, max_length=10000)
 
 
 class ChunkPreviewInput(BaseModel):
@@ -981,6 +982,7 @@ async def change_document_review(
             action=payload.action,
             version=payload.version,
             content=payload.content,
+            boundaries=payload.boundaries,
             operator=current_user.uid,
         )
         result["can_manage"] = True
@@ -989,6 +991,9 @@ async def change_document_review(
         raise HTTPException(404, str(exc)) from exc
     except ReviewConflict as exc:
         raise HTTPException(409, str(exc)) from exc
+
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @knowledge.delete("/databases/{kb_id}/documents/batch")

@@ -11,11 +11,11 @@
           v-model:value="selected"
           aria-label="内容版本"
           :options="versionOptions"
-          :disabled="dirty || busy"
+          :disabled="dirty || busy || repairOpen"
         />
         <span v-if="current">{{ current.approved_at ? '已审核' : '待审核' }}</span>
         <span v-if="published">当前检索版本：{{ published.version }}</span>
-        <a-button :disabled="dirty || busy" @click="load">重新加载</a-button>
+        <a-button :disabled="dirty || busy || repairOpen" @click="load">重新加载</a-button>
         <a-button v-if="dirty" :disabled="busy" @click="draft = current.content"
           >撤销未保存修改</a-button
         >
@@ -32,13 +32,13 @@
           >
           <a-button
             type="primary"
-            :disabled="!editable || dirty || !!latest.approved_at"
+            :disabled="!editable || dirty || repairOpen || !!latest.approved_at"
             :loading="busy"
             @click="act('approve')"
             >审核通过</a-button
           >
           <a-button
-            :disabled="!editable || dirty || !latest.approved_at || !preview"
+            :disabled="!editable || dirty || repairOpen || !latest.approved_at || !preview"
             :loading="busy"
             @click="indexDocument"
             >切片入库</a-button
@@ -48,24 +48,53 @@
       <p class="review-note">
         审核针对已保存的最新版本。修订后需重新审核、入库；已有检索片段在重新入库前保持原版本。
       </p>
-      <a-alert v-if="actionError" :message="actionError" type="error" show-icon />
+      <a-alert v-if="actionError && !repairOpen" :message="actionError" type="error" show-icon />
       <template v-if="current">
         <div class="chunk-preview-controls">
           <strong>混合材料切片</strong>
           <label
             >目标长度（估算 tokens）
-            <a-input-number v-model:value="chunkSize" :min="64" :max="4096" :disabled="busy" />
+            <a-input-number
+              v-model:value="chunkSize"
+              :min="64"
+              :max="4096"
+              :disabled="busy || repairOpen || current.report.chunk_boundaries != null"
+            />
           </label>
           <a-button
-            :disabled="dirty || busy || current !== latest"
+            :disabled="dirty || busy || repairOpen || current !== latest"
             :loading="previewLoading"
             @click="previewChunks"
             >预览切片</a-button
           >
-          <span>保存后预览，审核通过后按此预览入库。</span>
+          <span>{{
+            current.report.chunk_boundaries != null
+              ? '使用已保存的人工边界；目标长度不改变切点。'
+              : '保存后预览，审核通过后按此预览入库。'
+          }}</span>
+          <a-button v-if="preview" :disabled="!editable || repairOpen" @click="repairOpen = true"
+            >修复切片</a-button
+          >
+          <a-popconfirm
+            v-if="current.report.chunk_boundaries != null"
+            title="恢复自动切分会生成待审核的新版本，保留清洗稿正文。"
+            @confirm="saveBoundaries(null)"
+          >
+            <a-button :disabled="!editable || dirty || repairOpen">恢复自动切分</a-button>
+          </a-popconfirm>
         </div>
         <a-alert v-if="previewError" :message="previewError" type="error" show-icon />
-        <details v-if="preview" open class="chunk-preview-list">
+        <ChunkRepairEditor
+          v-if="repairOpen && preview"
+          :content="current.content"
+          :chunks="preview.chunks"
+          :busy="busy"
+          :error="actionError"
+          @save="saveBoundaries"
+          @close="repairOpen = false"
+          @locate="locateSource"
+        />
+        <details v-if="preview && !repairOpen" open class="chunk-preview-list">
           <summary>待入库片段：{{ preview.chunks.length }} 个 · 版本 {{ preview.version }}</summary>
           <SourceChunkCard
             v-for="chunk in preview.chunks.slice((previewPage - 1) * 10, previewPage * 10)"
@@ -120,7 +149,7 @@
             <a-textarea
               id="review-content"
               v-model:value="draft"
-              :readonly="!editable"
+              :readonly="!editable || repairOpen"
               :maxlength="2000000"
             />
             <small
@@ -137,9 +166,10 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { documentApi } from '@/apis/knowledge_api'
+import ChunkRepairEditor from '@/components/knowledge/ChunkRepairEditor.vue'
 import SourceChunkCard from '@/components/knowledge/SourceChunkCard.vue'
 
 const props = defineProps({
@@ -157,6 +187,7 @@ const draft = ref('')
 const sourceMode = ref('text')
 const chunkSize = ref(512)
 const preview = ref(null)
+const repairOpen = ref(false)
 const previewLoading = ref(false)
 const previewError = ref('')
 const previewPage = ref(1)
@@ -178,7 +209,7 @@ const editable = computed(
     !busy.value
 )
 const dirty = computed(() => !!current.value && draft.value !== current.value.content)
-watch(dirty, (value) => emit('dirty-change', value))
+watch([dirty, repairOpen], ([changed, repairing]) => emit('dirty-change', changed || repairing))
 onBeforeUnmount(() => emit('dirty-change', false))
 const versionOptions = computed(() =>
   data.value.revisions.map((r) => ({
@@ -201,6 +232,37 @@ watch([draft, selected, chunkSize], () => {
   previewError.value = ''
 })
 
+async function saveBoundaries(boundaries) {
+  busy.value = true
+  actionError.value = ''
+  try {
+    accept(
+      await documentApi.changeDocumentReview(props.kbId, props.fileId, {
+        action: 'boundaries',
+        version: current.value.version,
+        boundaries
+      })
+    )
+    repairOpen.value = false
+    await nextTick()
+    await previewChunks()
+    message.success('切分修订已保存，请核对预览并重新审核')
+  } catch (e) {
+    actionError.value = e.message || '保存失败，调整内容已保留'
+  } finally {
+    busy.value = false
+  }
+}
+async function locateSource(position) {
+  repairOpen.value = false
+  await nextTick()
+  const editor = document.getElementById('review-content')
+  const offset = Array.from(current.value.content).slice(0, position).join('').length
+  editor?.focus()
+  editor?.setSelectionRange(offset, offset)
+  editor?.scrollIntoView({ block: 'center' })
+  message.info('已定位清洗稿；修改正文后原切分方案失效，需保存并重新预览')
+}
 async function previewChunks() {
   const id = ++previewRequestId
   preview.value = null
