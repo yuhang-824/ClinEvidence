@@ -326,6 +326,9 @@ class KnowledgeBase(ABC):
 
             params["image_bucket"] = get_minio_client().KB_BUCKETS["images"]
             params["image_prefix"] = f"{kb_id}/kb-images"
+            from yuxi.knowledge.cleaning import PAGE_BREAK, clean_document
+
+            params["page_separator"] = PAGE_BREAK
 
             markdown_content = await parse_document(
                 source=file_path,
@@ -334,6 +337,7 @@ class KnowledgeBase(ABC):
 
             # Save Markdown to MinIO
             markdown_file_path = await self._save_markdown_to_minio(kb_id, file_id, markdown_content)
+            cleaned_content, cleaning_report = clean_document(markdown_content)
 
             # Update metadata
             file_meta["status"] = FileStatus.PARSED
@@ -356,6 +360,7 @@ class KnowledgeBase(ABC):
                 kb_id=kb_id,
                 allowed_statuses={FileStatus.PARSING},
                 data=update_data,
+                parsed_revision=(markdown_content, cleaned_content, cleaning_report),
                 **owner_filter,
             )
             if updated_record is None:
@@ -724,7 +729,11 @@ class KnowledgeBase(ABC):
         if not markdown_file:
             raise Exception(f"文件 {file_id} 没有解析后的 Markdown 内容")
 
-        content = await self._read_markdown_from_minio(markdown_file)
+        from yuxi.repositories.document_review_repository import DocumentReviewRepository
+
+        content = await DocumentReviewRepository().published_content(kb_id, file_id)
+        if content is None:
+            content = await self._read_markdown_from_minio(markdown_file)
         return self._build_open_file_window(content, offset=offset, limit=limit)
 
     async def find_file_content(
@@ -749,7 +758,11 @@ class KnowledgeBase(ABC):
         if not markdown_file:
             raise Exception(f"文件 {file_id} 没有解析后的 Markdown 内容")
 
-        content = await self._read_markdown_from_minio(markdown_file)
+        from yuxi.repositories.document_review_repository import DocumentReviewRepository
+
+        content = await DocumentReviewRepository().published_content(kb_id, file_id)
+        if content is None:
+            content = await self._read_markdown_from_minio(markdown_file)
         return self._build_find_file_windows(
             content,
             patterns=patterns,

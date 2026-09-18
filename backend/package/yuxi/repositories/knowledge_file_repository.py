@@ -758,6 +758,7 @@ class KnowledgeFileRepository:
         data: dict[str, Any],
         processing_task_id: str | None = None,
         processing_owner: str | None = None,
+        parsed_revision: tuple | None = None,
     ) -> KnowledgeFile | None:
         lease_task_id = processing_task_id or data.get("processing_task_id")
         lease_owner = processing_owner or data.get("processing_owner")
@@ -787,21 +788,33 @@ class KnowledgeFileRepository:
                 )
                 if task_record is None:
                     return None
-                file_record = await session.scalar(select(KnowledgeFile).where(*filters).with_for_update())
-                if file_record is None:
-                    return None
+            file_record = await session.scalar(select(KnowledgeFile).where(*filters).with_for_update())
+            if file_record is None:
+                return None
+            if lease_task_id is not None and lease_owner is not None:
                 database_now = await session.scalar(select(func.timezone("utc", func.clock_timestamp())))
                 if task_record.lease_expires_at is None or task_record.lease_expires_at <= database_now:
                     return None
-                for key, value in sanitized_data.items():
-                    setattr(file_record, key, value)
-                await session.flush()
-                return file_record
-
-            result = await session.execute(
-                update(KnowledgeFile).where(*filters).values(**sanitized_data).returning(KnowledgeFile)
+            from yuxi.repositories.document_review_repository import (
+                ReviewConflict,
+                add_parsed_revision,
+                latest_revision,
             )
-            return result.scalar_one_or_none()
+
+            if sanitized_data.get("status") == "indexing":
+                revision = await latest_revision(session, file_id)
+                if revision is None or not revision.approved_at:
+                    raise ReviewConflict("请先审核最新清洗稿，再执行入库")
+            if parsed_revision is not None:
+                await add_parsed_revision(session, file_id, *parsed_revision, sanitized_data.get("updated_by"))
+            if sanitized_data.get("status") == "indexed":
+                revision = await latest_revision(session, file_id)
+                if revision is not None:
+                    revision.indexed_at = utc_now()
+            for key, value in sanitized_data.items():
+                setattr(file_record, key, value)
+            await session.flush()
+            return file_record
 
     @staticmethod
     async def fail_task_processing_in_session(session, *, task_id: str, error: str) -> int:

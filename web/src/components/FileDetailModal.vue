@@ -1,7 +1,7 @@
 <template>
   <a-modal
     v-model:open="visible"
-    width="800px"
+    :width="viewMode === 'review' ? 'min(1400px, 96vw)' : '800px'"
     :footer="null"
     :closable="false"
     wrap-class-name="file-detail"
@@ -22,7 +22,11 @@
 
           <!-- 视图模式切换 -->
           <div class="view-controls" v-if="file && viewModeOptions.length > 1">
-            <a-segmented v-model:value="viewMode" :options="viewModeOptions" />
+            <a-segmented
+              v-model:value="viewMode"
+              :options="viewModeOptions"
+              :disabled="reviewDirty"
+            />
           </div>
 
           <!-- 下载按钮下拉菜单 -->
@@ -59,7 +63,24 @@
       <p>{{ detailError }}</p>
     </div>
     <div v-else-if="file && hasAvailableView" class="file-detail-content">
-      <div v-if="viewMode === 'source'" class="content-panel source-panel">
+      <DocumentReviewPanel
+        @dirty-change="reviewDirty = $event"
+        v-if="viewMode === 'review'"
+        :key="file.file_id"
+        :kb-id="String(kbId)"
+        :file-id="String(fileId)"
+      >
+        <template #source>
+          <AgentFilePreview
+            :file="sourcePreviewFile"
+            :file-path="file?.filename || ''"
+            :show-header="false"
+            :show-download="false"
+            :full-height="true"
+          />
+        </template>
+      </DocumentReviewPanel>
+      <div v-else-if="viewMode === 'source'" class="content-panel source-panel">
         <AgentFilePreview
           :file="sourcePreviewFile"
           :file-path="file?.filename || ''"
@@ -119,7 +140,7 @@
 
 <script setup>
 import { computed, h, onBeforeUnmount, ref, watch } from 'vue'
-import { message } from 'ant-design-vue'
+import { message, Modal } from 'ant-design-vue'
 import { documentApi } from '@/apis/knowledge_api'
 import { getWorkspaceKnowledgeFileContent } from '@/apis/workspace_api'
 import { mergeChunks } from '@/utils/chunkUtils'
@@ -134,6 +155,7 @@ import {
 import MarkdownPreview from '@/components/common/MarkdownPreview.vue'
 import FileTypeIcon from '@/components/common/FileTypeIcon.vue'
 import AgentFilePreview from '@/components/AgentFilePreview.vue'
+import DocumentReviewPanel from '@/components/knowledge/DocumentReviewPanel.vue'
 import { Download, ChevronDown, FileSearch, FileText, Rows3, X } from '@lucide/vue'
 
 const props = defineProps({
@@ -153,9 +175,18 @@ const props = defineProps({
 
 const emit = defineEmits(['update:open', 'closed'])
 
+const reviewDirty = ref(false)
 const visible = computed({
   get: () => props.open,
-  set: (value) => emit('update:open', value)
+  set: (value) => {
+    if (!value && reviewDirty.value) {
+      Modal.confirm({
+        title: '放弃未保存的修订？',
+        content: '关闭后将丢失尚未保存的内容。',
+        onOk: () => emit('update:open', false)
+      })
+    } else emit('update:open', value)
+  }
 })
 
 const file = ref(null)
@@ -292,6 +323,7 @@ const availableViewModes = computed(() => {
   const modes = []
   if (hasSourcePreview.value) modes.push('source')
   if (hasMarkdownPreview.value) modes.push('markdown')
+  if (hasMarkdownPreview.value) modes.push('review')
   if (hasChunkPreview.value) modes.push('chunks')
   return modes
 })
@@ -314,6 +346,7 @@ const viewModeOptions = computed(() => {
   const optionMap = {
     source: makeViewModeOption('源文件', 'source', FileSearch),
     markdown: makeViewModeOption('Markdown', 'markdown', FileText),
+    review: { label: '清洗与审核', value: 'review' },
     chunks: makeViewModeOption('Chunks', 'chunks', Rows3)
   }
   return availableViewModes.value.map((mode) => optionMap[mode])
@@ -434,7 +467,12 @@ watch(
 watch(
   [visible, file, viewMode],
   async ([open, currentFile, currentViewMode]) => {
-    if (!open || !currentFile || !hasSourcePreview.value || currentViewMode !== 'source') {
+    if (
+      !open ||
+      !currentFile ||
+      !hasSourcePreview.value ||
+      !['source', 'review'].includes(currentViewMode)
+    ) {
       if (!open || !hasSourcePreview.value) {
         resetSourcePreview()
       }

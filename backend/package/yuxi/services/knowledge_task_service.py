@@ -38,12 +38,6 @@ async def run_knowledge_ingest(context: TaskContext) -> dict:
     items = list(payload["items"])
     params = dict(payload.get("params") or {})
     operator_id = payload["operator_id"]
-    auto_index = bool(params.get("auto_index", False))
-    indexing_params = {
-        key: params[key]
-        for key in ("chunk_preset_id", "chunk_parser_config")
-        if key in params and params[key] is not None
-    }
     processing_owner = {
         "processing_task_id": context.task_id,
         "processing_owner": context.worker_id,
@@ -84,7 +78,7 @@ async def run_knowledge_ingest(context: TaskContext) -> dict:
                     "error_type": error_type,
                 }
 
-        parse_end = 60.0 if auto_index else 95.0
+        parse_end = 95.0
         for index, record in enumerate(added_files, 1):
             await context.raise_if_cancelled()
             await context.set_progress(
@@ -99,8 +93,7 @@ async def run_knowledge_ingest(context: TaskContext) -> dict:
                     **processing_owner,
                 )
                 record["file_meta"] = file_meta
-                if not auto_index or file_meta.get("status") != "parsed":
-                    processed_items[record["index"]] = file_meta
+                processed_items[record["index"]] = file_meta
             except Exception as exc:
                 logger.error("解析文件失败 %s (file_id=%s): %s", record["item"], record["file_id"], exc)
                 error_type = "timeout" if isinstance(exc, TimeoutError) else "parse_failed"
@@ -112,36 +105,6 @@ async def run_knowledge_ingest(context: TaskContext) -> dict:
                     "error_type": error_type,
                 }
 
-        if auto_index:
-            parsed_files = [record for record in added_files if record["file_meta"].get("status") == "parsed"]
-            for index, record in enumerate(parsed_files, 1):
-                await context.raise_if_cancelled()
-                await context.set_progress(
-                    60.0 + (index / len(parsed_files)) * 35.0,
-                    f"[3/3] 入库文件 {index}/{len(parsed_files)}",
-                )
-                try:
-                    await knowledge_base.update_file_params(
-                        kb_id,
-                        record["file_id"],
-                        indexing_params,
-                        operator_id=operator_id,
-                    )
-                    processed_items[record["index"]] = await knowledge_base.index_file(
-                        kb_id,
-                        record["file_id"],
-                        operator_id=operator_id,
-                        params=indexing_params,
-                        **processing_owner,
-                    )
-                except Exception as exc:
-                    logger.error("自动入库失败 %s (file_id=%s): %s", record["item"], record["file_id"], exc)
-                    processed_items[record["index"]] = {
-                        "item": record["item"],
-                        "status": "failed",
-                        "error": f"入库失败: {exc}",
-                        "error_type": "index_failed",
-                    }
     except asyncio.CancelledError:
         await context.set_progress(100.0, "任务已取消")
         raise

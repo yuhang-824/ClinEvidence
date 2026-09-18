@@ -318,7 +318,7 @@ async def test_index_file_persists_chunk_stats(monkeypatch):
         del kb_id, embedding_model_spec
         return collection
 
-    async def read_markdown(path):
+    async def read_markdown(*args):
         return "# demo"
 
     async def embedding_function(texts):
@@ -331,7 +331,9 @@ async def test_index_file_persists_chunk_stats(monkeypatch):
         store_calls.append((kb_id, file_id, collection_arg, list(chunk_records), embedding_fn))
 
     kb._get_or_create_milvus_collection = get_collection
-    kb._read_markdown_from_minio = read_markdown
+    monkeypatch.setattr(
+        "yuxi.repositories.document_review_repository.DocumentReviewRepository.approved_content", read_markdown
+    )
     kb._split_text_into_chunks = lambda text, file_id, filename, params: chunks
     kb._get_embedding_function = lambda embedding_model_spec: embedding_function
     kb.delete_file_chunks_only = delete_file_chunks_only
@@ -400,13 +402,15 @@ async def test_cancellation_marks_file_retryable(monkeypatch, operation, expecte
             del kb_id, embedding_model_spec
             return FakeCollection()
 
-        async def cancelled_step(path):
+        async def cancelled_step(*args):
             started.set()
             await asyncio.Event().wait()
 
         kb._get_or_create_milvus_collection = get_collection
         kb._get_embedding_function = lambda embedding_model_spec: None
-        kb._read_markdown_from_minio = cancelled_step
+        monkeypatch.setattr(
+            "yuxi.repositories.document_review_repository.DocumentReviewRepository.approved_content", cancelled_step
+        )
 
         async def get_system_options(_option, _db=None):
             return {"embed_model": EMBEDDING_MODEL_SPEC}

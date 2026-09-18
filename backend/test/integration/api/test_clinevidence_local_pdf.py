@@ -10,7 +10,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from yuxi.agents.skills.repository import SkillRepository
 from yuxi.repositories.user_repository import UserRepository
@@ -123,9 +123,57 @@ async def test_pdf_upload_parse_index_retrieve_delete_without_graph(tmp_path):
             async with pg_manager.get_async_session_context() as session:
                 files = list((await session.execute(select(KnowledgeFile).where(KnowledgeFile.kb_id == kb_id))).scalars())
                 chunks = list((await session.execute(select(KnowledgeChunk).where(KnowledgeChunk.kb_id == kb_id))).scalars())
-                assert len(files) == 1 and files[0].status == 'indexed'
-                assert chunks and 'ALPHA' in '\n'.join(chunk.content for chunk in chunks)
+                assert len(files) == 1 and files[0].status == 'parsed'
+                assert not chunks
                 file_id = files[0].file_id
+            review_url = f'/api/knowledge/databases/{kb_id}/documents/{file_id}/review'
+            review = await request('GET', review_url)
+            assert review['revisions'][0]['raw_content']
+            assert review['revisions'][0]['approved_at'] is None
+            async with pg_manager.get_async_session_context() as session:
+                await session.execute(update(User).where(User.id == user.id).values(role='user'))
+            try:
+                denied = await client.post(review_url, json={'action': 'approve', 'version': 1})
+                assert denied.status_code == 403
+            finally:
+                async with pg_manager.get_async_session_context() as session:
+                    await session.execute(update(User).where(User.id == user.id).values(role='superadmin'))
+            # 直接索引入口必须拒绝未审核稿，且不产生片段。
+            blocked = await request('POST', f'/api/knowledge/databases/{kb_id}/documents/index', json={'file_ids': [file_id], 'params': {}})
+            for _ in range(120):
+                blocked_task = (await request('GET', f"/api/tasks/{blocked['task_id']}"))['task']
+                if blocked_task['status'] in {'success', 'failed', 'cancelled'}:
+                    break
+                await asyncio.sleep(1)
+            async with pg_manager.get_async_session_context() as session:
+                assert not list(await session.scalars(select(KnowledgeChunk).where(KnowledgeChunk.file_id == file_id)))
+            edited = review['revisions'][0]['content'] + '\n\nAUDITED CONTENT MARKER'
+            saved = await request('POST', review_url, json={'action': 'save', 'version': 1, 'content': edited})
+            assert saved['revisions'][-1]['version'] == 2
+            assert (await client.post(review_url, json={'action': 'approve', 'version': 1})).status_code == 409
+            assert (await client.post(review_url, json={'action': 'save', 'version': 2, 'content': ' '})).status_code == 400
+            assert (await client.get(f'/api/knowledge/databases/{kb_id}/documents/missing/review')).status_code == 404
+            approved = await request('POST', review_url, json={'action': 'approve', 'version': 2})
+            assert approved['revisions'][-1]['approved_at']
+            indexed = await request('POST', f'/api/knowledge/databases/{kb_id}/documents/index', json={'file_ids': [file_id], 'params': {'chunk_preset_id': 'general'}})
+            for _ in range(120):
+                task = (await request('GET', f"/api/tasks/{indexed['task_id']}"))['task']
+                if task['status'] in {'success', 'failed', 'cancelled'}:
+                    break
+                await asyncio.sleep(1)
+            async with pg_manager.get_async_session_context() as session:
+                file = await session.scalar(select(KnowledgeFile).where(KnowledgeFile.file_id == file_id))
+                chunks = list(await session.scalars(select(KnowledgeChunk).where(KnowledgeChunk.file_id == file_id)))
+                assert file.status == 'indexed', task
+                assert 'AUDITED CONTENT MARKER' in '\n'.join(c.content for c in chunks)
+            external = f'/api/knowledge/databases/external/{kb_id}/files/{file_id}'
+            opened = await request('GET', external + '/open')
+            assert 'AUDITED CONTENT MARKER' in json.dumps(opened)
+            found = await request('POST', external + '/find', json={'patterns': ['AUDITED CONTENT MARKER']})
+            assert 'AUDITED CONTENT MARKER' in json.dumps(found)
+            await request('POST', review_url, json={'action': 'save', 'version': 2, 'content': 'UNPUBLISHED DRAFT'})
+            opened = await request('GET', external + '/open')
+            assert 'AUDITED CONTENT MARKER' in json.dumps(opened) and 'UNPUBLISHED DRAFT' not in json.dumps(opened)
             parsed = await request('GET', f'/api/knowledge/databases/{kb_id}/documents/{file_id}/content')
             markdown = parsed['content']
             assert markdown.index('LEFT LAST') < markdown.index('RIGHT FIRST')

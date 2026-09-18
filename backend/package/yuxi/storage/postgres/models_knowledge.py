@@ -80,6 +80,25 @@ class KnowledgeFile(Base):
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
+class KnowledgeDocumentRevision(Base):
+    """解析原文、清洗稿和人工修订的不可变内容版本。"""
+
+    __tablename__ = "knowledge_document_revisions"
+    __table_args__ = (UniqueConstraint("file_id", "version", name="uq_document_revision_version"),)
+
+    id = Column(Integer, primary_key=True)
+    file_id = Column(String(64), ForeignKey("knowledge_files.file_id", ondelete="CASCADE"), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    raw_content = Column(Text)
+    content = Column(Text, nullable=False)
+    report = Column(JSON_VALUE, nullable=False)
+    created_by = Column(String(64))
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    approved_by = Column(String(64))
+    approved_at = Column(DateTime(timezone=True))
+    indexed_at = Column(DateTime(timezone=True))
+
+
 class KnowledgeChunk(Base):
     """知识库 Chunk 模型"""
 

@@ -55,7 +55,7 @@ def pdfreader(file_path, params=None):
     assert file_path.suffix.lower() == ".pdf", "File format not supported"
 
     try:
-        return parse_local_pdf(file_path)
+        return parse_local_pdf(file_path, page_separator=(params or {}).get("page_separator", "\n\n"))
     except (PDFSyntaxError, PSEOF, PdfminerException) as exc:
         raise PdfReadError(str(exc)) from exc
 

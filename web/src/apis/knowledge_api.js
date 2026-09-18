@@ -230,6 +230,12 @@ export const documentApi = {
     return apiAdminGet(`/api/knowledge/databases/${kbId}/documents/${docId}/content`)
   },
 
+  getDocumentReview: (kbId, docId) =>
+    apiAdminGet(`/api/knowledge/databases/${kbId}/documents/${docId}/review`),
+
+  changeDocumentReview: (kbId, docId, payload) =>
+    apiAdminPost(`/api/knowledge/databases/${kbId}/documents/${docId}/review`, payload),
+
   /**
    * 删除文档
    * @param {string} kbId - 知识库ID
@@ -327,8 +333,6 @@ export const documentApi = {
 // =============================================================================
 // === 图谱构建分组 ===
 // =============================================================================
-
-
 
 // =============================================================================
 // === 思维导图分组 ===
@@ -450,7 +454,6 @@ export const fileApi = {
     }
     return `/api/knowledge/files/upload?kb_id=${encodeURIComponent(kbId)}`
   },
-
 
   /**
    * 从工作区导入文件到知识库 MinIO 暂存区

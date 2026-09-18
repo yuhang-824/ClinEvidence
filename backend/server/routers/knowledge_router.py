@@ -897,6 +897,55 @@ async def get_document_content(kb_id: str, doc_id: str, current_user: User = Dep
         return {"message": "Failed to get file content", "status": "failed"}
 
 
+class DocumentReviewInput(BaseModel):
+    """使用显式版本防止覆盖他人修改。"""
+
+    action: str = Field(pattern="^(prepare|save|approve)$")
+    version: int = Field(ge=0)
+    content: str | None = Field(default=None, max_length=2_000_000)
+
+
+@knowledge.get("/databases/{kb_id}/documents/{doc_id}/review")
+async def get_document_review(kb_id: str, doc_id: str, current_user: User = Depends(require_knowledge_base_read)):
+    """读取原始解析、修订和审核记录。"""
+    from yuxi.services.document_review_service import read_review
+
+    try:
+        result = await read_review(kb_id, doc_id)
+        database = await knowledge_base.get_database_info(kb_id)
+        result["can_manage"] = resolve_knowledge_base_permission(current_user, database) == ResourcePermission.MANAGE
+        return result
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@knowledge.post("/databases/{kb_id}/documents/{doc_id}/review")
+async def change_document_review(
+    kb_id: str, doc_id: str, payload: DocumentReviewInput, current_user: User = Depends(require_knowledge_base_manage)
+):
+    """生成、保存或审核清洗稿。"""
+    from yuxi.repositories.document_review_repository import ReviewConflict
+    from yuxi.services.document_review_service import change_review
+
+    if payload.action == "save" and (payload.content is None or not payload.content.strip()):
+        raise HTTPException(400, "修订内容不能为空")
+    try:
+        result = await change_review(
+            kb_id,
+            doc_id,
+            action=payload.action,
+            version=payload.version,
+            content=payload.content,
+            operator=current_user.uid,
+        )
+        result["can_manage"] = True
+        return result
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ReviewConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @knowledge.delete("/databases/{kb_id}/documents/batch")
 async def batch_delete_documents(
     kb_id: str, file_ids: list[str] = Body(...), current_user: User = Depends(require_knowledge_base_manage)
@@ -1339,8 +1388,6 @@ async def move_document(
     except Exception as e:
         logger.error(f"移动文件失败 {e}, {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
 
 
 @knowledge.post("/files/import-workspace")

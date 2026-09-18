@@ -687,7 +687,9 @@ class MilvusKB(KnowledgeBase):
             chunk_parser_config.setdefault("embed_model_id", (await system_options.get())["embed_model"])
             params["chunk_parser_config"] = chunk_parser_config
             # Read markdown
-            markdown_content = await self._read_markdown_from_minio(file_meta["markdown_file"])
+            from yuxi.repositories.document_review_repository import DocumentReviewRepository
+
+            markdown_content = await DocumentReviewRepository().approved_content(kb_id, file_id)
             filename = file_meta.get("filename")
 
             # Split

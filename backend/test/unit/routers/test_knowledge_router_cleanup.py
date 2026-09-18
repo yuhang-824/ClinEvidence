@@ -373,8 +373,8 @@ async def test_index_pending_documents_uses_pending_statuses_and_params(monkeypa
     ]
 
 
-async def test_add_documents_auto_index_returns_one_final_result_per_item(monkeypatch):
-    """成功入库的文件元数据会携带 error=None，不应被统计为失败 (#793)。"""
+async def test_add_documents_auto_index_stops_at_review(monkeypatch):
+    """旧客户端 auto_index 不能绕过审核，解析成功不计失败。"""
     context = FakeTaskContext()
     item = "minio://knowledgebases/kb_1/upload/demo.txt"
 
@@ -396,7 +396,7 @@ async def test_add_documents_auto_index_returns_one_final_result_per_item(monkey
     async def fake_index_file(
         kb_id: str, file_id: str, operator_id: str | None = None, params: dict | None = None, **_kwargs
     ):
-        return {"file_id": file_id, "status": "indexed", "error": None}
+        raise AssertionError("未审核稿不能自动入库")
 
     async def fake_enqueue(name: str, task_type: str, payload: dict):
         context.payload = payload
@@ -425,7 +425,7 @@ async def test_add_documents_auto_index_returns_one_final_result_per_item(monkey
     assert result["status"] == "queued"
     assert context.result["submitted"] == 1
     assert context.result["failed"] == 0
-    assert context.result["items"] == [{"file_id": "file_1", "status": "indexed", "error": None}]
+    assert context.result["items"] == [{"file_id": "file_1", "status": "parsed", "error": None}]
 
 
 async def test_add_documents_passes_source_path_to_file_record(monkeypatch):

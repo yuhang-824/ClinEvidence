@@ -249,7 +249,9 @@ class RapidOCRParser(BaseDocumentProcessor):
                     finally:
                         page.close()
 
-                return parse_local_pdf(pdf_path, ocr_page=ocr_page)
+                return parse_local_pdf(
+                    pdf_path, ocr_page=ocr_page, page_separator=(params or {}).get("page_separator", "\n\n")
+                )
 
         except OCRException:
             raise

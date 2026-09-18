@@ -31,19 +31,14 @@
           />
         </div>
         <div class="auto-index-toggle">
-          <a-checkbox v-model:checked="autoIndex">上传后自动入库</a-checkbox>
+          <span>上传解析后，请在文件详情中清洗并审核，再切片入库</span>
         </div>
       </div>
 
       <!-- 2. 配置面板 -->
-      <div
-        class="settings-panel"
-      >
+      <div class="settings-panel">
         <!-- 第一行：存储位置 + OCR 引擎 -->
-        <div
-          class="setting-row"
-            :class="{ 'two-cols': folderTreeData.length > 0 }"
-        >
+        <div class="setting-row" :class="{ 'two-cols': folderTreeData.length > 0 }">
           <div class="col-item" v-if="folderTreeData.length > 0">
             <div class="setting-label">存储位置</div>
             <div class="setting-content flex-row">
@@ -70,25 +65,6 @@
                 :disabled="chunkLoading"
                 @change="ocrEngineTouched = true"
                 @options-loaded="handleOcrOptionsLoaded"
-              />
-            </div>
-          </div>
-        </div>
-
-        <!-- 第二行：自动入库配置 (仅在开启时显示) -->
-        <div class="setting-row" v-if="autoIndex">
-          <div class="col-item">
-            <div class="setting-label">入库参数配置</div>
-            <div class="setting-content">
-              <ChunkParamsConfig
-                :temp-chunk-params="indexParams"
-                :show-qa-split="true"
-                :show-chunk-size-overlap="true"
-                :show-preset="true"
-                :allow-preset-follow-default="true"
-                :database-preset-id="
-                  store.database?.additional_params?.chunk_preset_id || 'general'
-                "
               />
             </div>
           </div>
@@ -245,8 +221,6 @@ import {
   ChevronDown,
   ChevronUp
 } from '@lucide/vue'
-import { buildChunkParamsPayload } from '@/utils/chunkUtils'
-import ChunkParamsConfig from '@/components/ChunkParamsConfig.vue'
 import OCRSelector from '@/components/OCRSelector.vue'
 import WorkspacePathPicker from '@/components/WorkspacePathPicker.vue'
 
@@ -555,7 +529,6 @@ watch(fileList, (newFileList) => {
   uploadTaskProgress.value = nextProgress
 })
 
-
 // 同名文件列表（用于显示提示）
 const sameNameFiles = ref([])
 
@@ -579,19 +552,6 @@ const ocrEngineTouched = ref(false)
 const processingParams = ref({
   ocr_engine: DEFAULT_OCR_ENGINE
 })
-
-// 自动入库相关
-const autoIndex = ref(false)
-const indexParams = ref({
-  chunk_preset_id: '',
-  chunk_parser_config: {}
-})
-
-const buildAutoIndexParams = () => {
-  return buildChunkParamsPayload(indexParams.value, {
-    includeSizeOverlap: true
-  })
-}
 
 const isFolderUpload = ref(false)
 
@@ -1041,10 +1001,6 @@ const chunkData = async () => {
       }
 
       const params = { ...processingParams.value, content_hashes, file_sizes }
-      if (autoIndex.value) {
-        params.auto_index = true
-        Object.assign(params, buildAutoIndexParams())
-      }
 
       await store.addFiles({
         items,
@@ -1109,10 +1065,6 @@ const chunkData = async () => {
     const params = { ...processingParams.value, content_hashes, file_sizes }
     if (Object.keys(source_paths).length > 0) {
       params.source_paths = source_paths
-    }
-    if (autoIndex.value) {
-      params.auto_index = true
-      Object.assign(params, buildAutoIndexParams())
     }
 
     await store.addFiles({

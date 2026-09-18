@@ -42,7 +42,7 @@ def image_rules(image):
     return results
 
 
-def parse_local_pdf(path, ocr_page=None) -> str:
+def parse_local_pdf(path, ocr_page=None, page_separator="\n\n") -> str:
     """优先读取文字页；图片页由调用者提供的坐标 OCR 处理。"""
     pages = []
     with pdfplumber.open(path) as document:
@@ -63,7 +63,7 @@ def parse_local_pdf(path, ocr_page=None) -> str:
             if fields:
                 text = "\n\n".join([text, *(field.text for field in fields)]).strip()
             pages.append(text)
-    return "\n\n".join(pages)
+    return page_separator.join(pages)
 
 
 def native_text_boxes(page) -> list[TextBox]:
