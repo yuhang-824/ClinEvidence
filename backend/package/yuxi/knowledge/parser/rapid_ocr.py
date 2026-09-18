@@ -128,17 +128,13 @@ class RapidOCRParser(BaseDocumentProcessor):
                 result = self.ocr(image_path)
                 processing_time = time.time() - start_time
 
-                # 提取文本
-                if result.txts:
-                    text = "\n".join(result.txts)
-                    logger.info(
-                        f"RapidOCR 成功: {os.path.basename(image_path) if isinstance(image, str) else 'temp_image'}"
-                        f" ({processing_time:.2f}s)"
-                    )
-                    return text
-                else:
-                    logger.warning(f"RapidOCR 未识别到文本: {image_path}")
-                    return ""
+                from yuxi.knowledge.parser.pdf_layout import render_layout
+
+                with Image.open(image_path) as source_image:
+                    boxes, horizontal, vertical = self._layout_result(result, source_image)
+                    text = render_layout(boxes, source_image.width, horizontal, vertical)
+                logger.info(f"RapidOCR 结构解析完成 ({processing_time:.2f}s)")
+                return text
 
             finally:
                 # 清理临时文件
@@ -152,6 +148,35 @@ class RapidOCRParser(BaseDocumentProcessor):
             error_msg = f"图像OCR处理失败: {str(e)}"
             logger.error(error_msg)
             raise OCRException(error_msg, self.get_service_name(), "processing_failed")
+
+    def _layout_result(self, result, image):
+        """验证 OCR 坐标与文字一一对应，禁止退回无坐标拼接。"""
+        from yuxi.knowledge.parser.pdf_layout import TextBox, image_rules
+
+        texts = list(result.txts) if result.txts is not None else []
+        if not texts:
+            if np.mean(np.asarray(image.convert("L")) < 200) > 0.005:
+                raise ValueError("页面存在可见内容但 OCR 未识别到文字，请使用版面解析引擎复核")
+            return [], [], []
+        coordinates = result.boxes
+        if coordinates is None or len(coordinates) != len(texts):
+            raise ValueError("OCR 缺少对应的文字坐标，无法保证阅读顺序")
+        boxes = []
+        for text, polygon in zip(texts, coordinates, strict=True):
+            points = np.asarray(polygon, dtype=float)
+            if points.shape != (4, 2) or not np.isfinite(points).all():
+                raise ValueError("OCR 文字区域坐标无效")
+            boxes.append(
+                TextBox(
+                    str(text),
+                    float(points[:, 0].min()),
+                    float(points[:, 1].min()),
+                    float(points[:, 0].max()),
+                    float(points[:, 1].max()),
+                )
+            )
+        horizontal, vertical = image_rules(image)
+        return boxes, horizontal, vertical
 
     def _create_temp_image_file(self, image) -> str:
         """将图像数据保存为临时文件"""
@@ -191,31 +216,40 @@ class RapidOCRParser(BaseDocumentProcessor):
         zoom_x = params.get("zoom_x", 2)
 
         try:
-            all_text = []
-            pdf_doc = pdfium.PdfDocument(pdf_path)
-            total_pages = len(pdf_doc)
+            from yuxi.knowledge.parser.pdf_layout import parse_local_pdf
 
-            logger.info(f"开始处理 PDF: {os.path.basename(pdf_path)} ({total_pages} 页)")
+            with pdfium.PdfDocument(pdf_path) as pdf_doc:
 
-            # 流式处理每一页,避免一次性加载所有图片到内存
-            for page_num in range(total_pages):
-                page = pdf_doc[page_num]
+                def ocr_page(page_index, width, height):
+                    """按页识别并将像素坐标转换回 PDF 坐标。"""
+                    self._load_model()
+                    page = pdf_doc[page_index]
+                    try:
+                        bitmap = page.render(scale=zoom_x)
+                        try:
+                            image = bitmap.to_pil().convert("RGB")
+                            try:
+                                result = self.ocr(np.asarray(image))
+                                boxes, horizontal, vertical = self._layout_result(result, image)
+                                sx, sy = width / image.width, height / image.height
+                                for box in boxes:
+                                    box.x0 *= sx
+                                    box.x1 *= sx
+                                    box.top *= sy
+                                    box.bottom *= sy
+                                return (
+                                    boxes,
+                                    [(x0 * sx, y * sy, x1 * sx) for x0, y, x1 in horizontal],
+                                    [(x * sx, y0 * sy, y1 * sy) for x, y0, y1 in vertical],
+                                )
+                            finally:
+                                image.close()
+                        finally:
+                            bitmap.close()
+                    finally:
+                        page.close()
 
-                # pypdfium2 仅支持统一缩放（原 zoom_x/zoom_y 默认均为 2）
-                img_pil = page.render(scale=zoom_x).to_pil()
-
-                # 立即处理,不保存到列表
-                text = self.process_image(img_pil)
-                all_text.append(text)
-
-                if (page_num + 1) % 10 == 0:
-                    logger.info(f"已处理 {page_num + 1}/{total_pages} 页")
-
-            pdf_doc.close()
-
-            result_text = "\n\n".join(all_text)
-            logger.info(f"PDF OCR 完成: {os.path.basename(pdf_path)} - {len(result_text)} 字符")
-            return result_text
+                return parse_local_pdf(pdf_path, ocr_page=ocr_page)
 
         except OCRException:
             raise

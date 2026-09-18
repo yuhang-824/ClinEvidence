@@ -45,7 +45,7 @@ class EmbeddingStub(BaseHTTPRequestHandler):
 
 async def test_pdf_upload_parse_index_retrieve_delete_without_graph(tmp_path):
     """无图谱服务时，合成 PDF 可经真实 worker 入库并回读来源。"""
-    from test.unit.knowledge.test_parser_facade import _build_pdf
+    from test.unit.knowledge.test_pdf_layout import build_layout_pdf
 
     pg_manager.initialize()
     suffix = uuid.uuid4().hex[:12]
@@ -106,7 +106,7 @@ async def test_pdf_upload_parse_index_retrieve_delete_without_graph(tmp_path):
             })
             kb_id = database['kb_id']
             pdf = Path(tmp_path) / 'scope.pdf'
-            _build_pdf(pdf, ['ClinEvidence synthetic source ALPHA evidence.', 'Second source page BETA evidence.'])
+            build_layout_pdf(pdf)
             upload = await request('POST', f'/api/knowledge/files/upload?kb_id={kb_id}',
                                    files={'file': ('scope.pdf', pdf.read_bytes(), 'application/pdf')})
             submitted = await request('POST', f'/api/knowledge/databases/{kb_id}/documents', json={
@@ -126,6 +126,11 @@ async def test_pdf_upload_parse_index_retrieve_delete_without_graph(tmp_path):
                 assert len(files) == 1 and files[0].status == 'indexed'
                 assert chunks and 'ALPHA' in '\n'.join(chunk.content for chunk in chunks)
                 file_id = files[0].file_id
+            parsed = await request('GET', f'/api/knowledge/databases/{kb_id}/documents/{file_id}/content')
+            markdown = parsed['content']
+            assert markdown.index('LEFT LAST') < markdown.index('RIGHT FIRST')
+            assert '| Name | BETA |' in markdown
+            assert 'Date: 2026-01-01' in markdown
             # Milvus 跨 API/worker 的可见性存在延迟，以最终检索结果为准。
             for _ in range(30):
                 result = await request('POST', f'/api/knowledge/databases/{kb_id}/query', json={'query': 'ALPHA', 'meta': {}})

@@ -89,6 +89,7 @@ export default defineConfig({
           { text: 'Agent 并发容量', link: '/advanced/agent-concurrency-capacity' },
           { text: 'Langfuse 集成', link: '/advanced/langfuse-integration' },
           { text: '文档解析', link: '/advanced/document-processing' },
+          { text: 'PDF 结构解析', link: '/advanced/pdf-layout-parsing' },
           { text: '知识库管理与 API', link: '/advanced/knowledge-base-operations' },
           { text: '文档导入与查询 API', link: '/advanced/knowledge-base-api' },
           { text: '知识导图', link: '/advanced/knowledge-base-graph' },

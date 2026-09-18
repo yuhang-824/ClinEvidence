@@ -20,7 +20,6 @@ from docling.datamodel.base_models import InputFormat
 from docling.datamodel.document import InputDocument
 from docling_core.types.doc import DoclingDocument
 from markdownify import markdownify as md_convert
-from pypdf import PdfReader
 
 from yuxi.knowledge.parser.capabilities import (
     IMAGE_FILE_EXTENSIONS,
@@ -41,16 +40,24 @@ _docling_office_lock = threading.Lock()
 
 
 def pdfreader(file_path, params=None):
-    """读取 PDF 文件并返回 text 文本。"""
+    """读取 PDF 文字层并保留栏顺序、规则表格和字段关系。"""
+    from pdfminer.pdfparser import PDFSyntaxError
+    from pdfminer.psparser import PSEOF
+    from pdfplumber.utils.exceptions import PdfminerException
+    from pypdf.errors import PdfReadError
+
+    from yuxi.knowledge.parser.pdf_layout import parse_local_pdf
+
     if isinstance(file_path, str):
         file_path = Path(file_path)
 
     assert file_path.exists(), "File not found"
     assert file_path.suffix.lower() == ".pdf", "File format not supported"
 
-    with file_path.open("rb") as pdf_file:
-        reader = PdfReader(pdf_file)
-        return "\n\n".join(page.extract_text(extraction_mode="plain").strip() for page in reader.pages)
+    try:
+        return parse_local_pdf(file_path)
+    except (PDFSyntaxError, PSEOF, PdfminerException) as exc:
+        raise PdfReadError(str(exc)) from exc
 
 
 def parse_pdf(file, params=None):
