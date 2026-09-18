@@ -237,6 +237,13 @@ export const documentApi = {
   changeDocumentReview: (kbId, docId, payload) =>
     apiAdminPost(`/api/knowledge/databases/${kbId}/documents/${docId}/review`, payload),
 
+  getReviewSource: (kbId, docId, version, page) =>
+    apiAdminGet(
+      `/api/knowledge/databases/${kbId}/documents/${docId}/review/source?version=${version}${page ? `&page=${page}` : ''}`,
+      {},
+      'blob'
+    ).then((response) => response.blob()),
+
   /**
    * 删除文档
    * @param {string} kbId - 知识库ID

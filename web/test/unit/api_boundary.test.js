@@ -41,6 +41,28 @@ async function withServer(run) {
   }
 }
 
+test('PDF 原页和结构 JSON 返回可用于浏览器下载的 Blob', async () => {
+  await withServer(async (server) => {
+    storageValues.set('user_token', 'test-token')
+    setActivePinia(createPinia())
+    const { useUserStore } = await server.ssrLoadModule('/src/stores/user.js')
+    useUserStore().userRole = 'admin'
+    const { documentApi } = await server.ssrLoadModule('/src/apis/knowledge_api.js')
+    for (const [page, type, body] of [
+      [1, 'image/png', 'png-fixture'],
+      [undefined, 'application/json', '{"schema_name":"DoclingDocument"}']
+    ]) {
+      globalThis.fetch = async () => new Response(body, { headers: { 'content-type': type } })
+      const blob = await documentApi.getReviewSource('kb-test', 'file-test', 2, page)
+      assert.ok(blob instanceof Blob)
+      assert.equal(blob.type, type)
+      assert.equal(await blob.text(), body)
+      const url = URL.createObjectURL(blob)
+      URL.revokeObjectURL(url)
+    }
+  })
+})
+
 test('公开登录 401 保留服务端错误且不清理当前会话', async () => {
   await withServer(async (server) => {
     storageValues.set('user_token', 'existing-token')

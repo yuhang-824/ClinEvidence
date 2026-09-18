@@ -44,7 +44,7 @@ async def read_review(kb_id, file_id):
     return result
 
 
-async def change_review(kb_id, file_id, *, action, version, operator, content=None, boundaries=None):
+async def change_review(kb_id, file_id, *, action, version, operator, content=None, boundaries=None, structure=None):
     """保留旧解析原文并按版本条件执行管理操作。"""
     repo = DocumentReviewRepository()
     initial = None
@@ -66,5 +66,43 @@ async def change_review(kb_id, file_id, *, action, version, operator, content=No
         approve=action == "approve",
         repair=action == "boundaries",
         boundaries=boundaries,
+        structure=structure,
     )
     return await read_review(kb_id, file_id)
+
+
+async def read_structure_artifact(kb_id, file_id, version, page=None):
+    """只从所属文件版本回读原始结构或渲染源 PDF 页。"""
+    import asyncio
+    import hashlib
+
+    from yuxi.repositories.knowledge_file_repository import KnowledgeFileRepository
+
+    data = await DocumentReviewRepository().read(kb_id, file_id)
+    revision = next((r for r in data["revisions"] if r["version"] == version), None)
+    structure = (revision or {}).get("report", {}).get("structure")
+    if not structure:
+        raise LookupError("此版本没有 PDF 结构原件")
+    if page is None:
+        bucket, key = parse_minio_url(structure["original_json"])
+        return await get_minio_client().adownload_file(bucket, key)
+    file = await KnowledgeFileRepository().get_by_file_id(file_id)
+    if file is None or file.kb_id != kb_id:
+        raise LookupError("文件不存在")
+    bucket, key = parse_minio_url(file.minio_url or file.path)
+    raw = await get_minio_client().adownload_file(bucket, key)
+    if hashlib.sha256(raw).hexdigest() != structure["source_sha256"]:
+        raise ReviewConflict("源 PDF 与此审核版本不一致")
+
+    def render():
+        """限制原页预览尺寸，坐标比例由前端按原页大小计算。"""
+        import pymupdf
+
+        with pymupdf.open(stream=raw, filetype="pdf") as document:
+            if not 1 <= page <= len(document):
+                raise LookupError("页码不存在")
+            source_page = document[page - 1]
+            scale = min(2, 1600 / max(source_page.rect.width, source_page.rect.height))
+            return source_page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False).tobytes("png")
+
+    return await asyncio.to_thread(render)

@@ -805,6 +805,11 @@ class KnowledgeFileRepository:
                 revision = await latest_revision(session, file_id)
                 if revision is None or not revision.approved_at:
                     raise ReviewConflict("请先审核最新清洗稿，再执行入库")
+                from yuxi.knowledge.structure import require_structure_review
+
+                expected_content = require_structure_review(revision.report)
+                if expected_content is not None and expected_content != revision.content:
+                    raise ReviewConflict("结构稿与正文不一致")
                 expected = sanitized_data.get("processing_params", {}).get("review_version")
                 if expected is not None and expected != revision.version:
                     raise ReviewConflict("预览版本已更新，请重新预览后入库")

@@ -87,6 +87,7 @@ class DocumentReviewRepository:
         approve=False,
         repair=False,
         boundaries=None,
+        structure=None,
     ):
         """拒绝陈旧版本和处理中编辑，审核只作用于已保存的最新版本。"""
         async with pg_manager.get_async_session_context() as session:
@@ -110,6 +111,11 @@ class DocumentReviewRepository:
             elif latest is None:
                 raise ReviewConflict("请先生成清洗稿")
             elif approve:
+                from yuxi.knowledge.structure import require_structure_review
+
+                expected_content = require_structure_review(latest.report)
+                if expected_content is not None and expected_content != latest.content:
+                    raise ReviewConflict("结构稿与正文不一致，请重新保存")
                 if not latest.content.strip():
                     raise ReviewConflict("空内容不能审核入库")
                 if not latest.approved_at:
@@ -130,6 +136,15 @@ class DocumentReviewRepository:
                     if boundaries is not None:
                         report["chunk_boundaries"] = boundaries
                     chunk_mixed(content, file_id, "", {}, revision={"version": version + 1, "report": report})
+                elif latest.report.get("structure"):
+                    from yuxi.knowledge.structure import revise_structure, structure_report
+
+                    if structure is None:
+                        raise ReviewConflict("请在逐页结构审核中修订，避免丢失原页来源")
+                    revised = revise_structure(latest.report["structure"], structure, operator, utc_now().isoformat())
+                    content, report = structure_report(revised, latest.report)
+                elif structure is not None:
+                    raise ReviewConflict("此版本没有结构数据，请重新解析 PDF")
                 session.add(
                     KnowledgeDocumentRevision(
                         file_id=file_id,
@@ -154,6 +169,11 @@ class DocumentReviewRepository:
             revision = await latest_revision(session, file_id) if file else None
             if revision is None or not revision.approved_at:
                 raise ReviewConflict("请先审核最新清洗稿，再执行入库")
+            from yuxi.knowledge.structure import require_structure_review
+
+            expected = require_structure_review(revision.report)
+            if expected is not None and expected != revision.content:
+                raise ReviewConflict("结构稿与正文不一致")
             return {"content": revision.content, "version": revision.version, "report": revision.report}
 
     async def published_content(self, kb_id, file_id):

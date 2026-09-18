@@ -50,6 +50,7 @@ def chunk_mixed(text: str, file_id: str, filename: str, config: dict, *, revisio
     offsets.append(len(text))
     chunks, headings, table_headers = [], [], []
     page_spans = (revision or {}).get("report", {}).get("page_spans", [])
+    block_spans = (revision or {}).get("report", {}).get("block_spans", [])
 
     def is_field(index):
         """冒号不是字段的充分证据，未完正文与跨行长值优先保持为段落。"""
@@ -118,6 +119,11 @@ def chunk_mixed(text: str, file_id: str, filename: str, config: dict, *, revisio
             "section": [text[a:b].strip().lstrip("# ") for _, a, b in headings],
             "spans": spans,
             "pages": pages,
+            "source_blocks": [
+                {k: block[k] for k in ("id", "page", "bbox")}
+                for block in block_spans
+                if any(block["start"] < s["end"] and block["end"] > s["start"] for s in spans)
+            ],
             "start_line": text.count("\n", 0, start) + 1,
             "end_line": text.count("\n", 0, end) + 1,
             "language": "mixed"
@@ -154,6 +160,12 @@ def chunk_mixed(text: str, file_id: str, filename: str, config: dict, *, revisio
             i += 1
             continue
         level = heading_level(line)
+        protected = next((b for b in block_spans if b["start"] == offsets[i] and b["kind"] == "relationship"), None)
+        if protected:
+            emit(protected["start"], protected["end"], "relationship")
+            while i < len(lines) and offsets[i] < protected["end"]:
+                i += 1
+            continue
         if level:
             headings = [h for h in headings if h[0] < level]
             emit(offsets[i], offsets[i + 1], "heading")
@@ -210,6 +222,8 @@ def chunk_mixed(text: str, file_id: str, filename: str, config: dict, *, revisio
         i += 1
         while i < len(lines):
             following = lines[i]
+            if any(b["start"] == offsets[i] and b["kind"] == "relationship" for b in block_spans):
+                break
             if not following.strip() and kind == "recommendation":
                 next_line = i + 1
                 while next_line < len(lines) and not lines[next_line].strip():
@@ -256,9 +270,32 @@ def chunk_mixed(text: str, file_id: str, filename: str, config: dict, *, revisio
     if not chunks and text.strip():
         headings = []
         emit(0, len(text), "paragraph")
+    # 已作为正文上下文携带的标题不再成为独立检索碎片，孤立标题仍保留。
+    carried = {
+        (s["start"], s["end"])
+        for c in chunks
+        if c["source_metadata"]["kind"] != "heading"
+        for s in c["source_metadata"]["spans"]
+        if s["role"] == "context"
+    }
+    chunks = [
+        c
+        for c in chunks
+        if c["source_metadata"]["kind"] != "heading"
+        or not any(a <= c["start_char_pos"] and c["end_char_pos"] <= b for a, b in carried)
+    ]
     boundaries = (revision or {}).get("report", {}).get("chunk_boundaries")
     if boundaries is not None:
         validate_boundaries(text, boundaries)
+        for point in boundaries:
+            if any(start < point <= header_end for start, header_end, _ in table_headers):
+                raise ValueError("表头和分隔行不能单独切片，请在完整数据行之后切分")
+            for block in block_spans:
+                if block["start"] < point < block["end"]:
+                    if block["kind"] == "relationship":
+                        raise ValueError("流程关系单元不能从中间切开，请在结构审核中修订关系")
+                    if block["kind"] == "table" and text[point - 1] != "\n":
+                        raise ValueError("结构表格只能在完整行之间切分")
         automatic, chunks = chunks, []
         for start, end in zip([0, *boundaries], [*boundaries, len(text)]):
             headings = []
@@ -283,4 +320,7 @@ def chunk_mixed(text: str, file_id: str, filename: str, config: dict, *, revisio
                 if header_end <= start < table_end and (table_start, header_end) not in extra:
                     extra.append((table_start, header_end))
             emit(start, end, "manual", extra)
+    for index, chunk in enumerate(chunks):
+        chunk["chunk_index"] = index
+        chunk["id"] = chunk["chunk_id"] = chunk["id"].rsplit("_", 1)[0] + f"_{index}"
     return chunks

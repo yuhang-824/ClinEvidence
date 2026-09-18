@@ -5,6 +5,7 @@ import base64
 import re
 import shutil
 import time
+import tomllib
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -357,17 +358,16 @@ async def test_pdf_never_enters_office_backend(tmp_path: Path, monkeypatch: pyte
     assert "Existing PDF path" in markdown
 
 
-def test_lock_excludes_full_docling_and_torch_runtime() -> None:
+def test_lock_uses_docling_standard_with_cpu_only_torch() -> None:
     lock_text = (Path(__file__).parents[3] / "uv.lock").read_text(encoding="utf-8")
-    package_names = set(re.findall(r'^name = "([^"]+)"$', lock_text, flags=re.MULTILINE))
-
-    assert {
-        "docling",
-        "docling-ibm-models",
-        "docling-parse",
-        "torch",
-        "torchvision",
-    }.isdisjoint(package_names)
+    packages = tomllib.loads(lock_text)["package"]
+    package_names = {package["name"] for package in packages}
+    assert {"docling-slim", "docling-ibm-models", "torch", "torchvision"} <= package_names
+    assert "docling" not in package_names
+    assert not any(name.startswith("nvidia-") or name == "triton" for name in package_names)
+    for package in packages:
+        if package["name"] in {"torch", "torchvision"}:
+            assert package["source"]["registry"] == "https://download.pytorch.org/whl/cpu"
 
 
 def test_convert_csv_to_markdown_preserves_column_dtypes(

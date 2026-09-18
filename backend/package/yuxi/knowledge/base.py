@@ -315,7 +315,7 @@ class KnowledgeBase(ABC):
             raise ValueError(message)
 
         try:
-            from yuxi.services.ocr_service import parse_document
+            from yuxi.services.ocr_service import parse_knowledge_document
 
             # Prepare params
             params = resolve_processing_params(
@@ -326,18 +326,19 @@ class KnowledgeBase(ABC):
 
             params["image_bucket"] = get_minio_client().KB_BUCKETS["images"]
             params["image_prefix"] = f"{kb_id}/kb-images"
-            from yuxi.knowledge.cleaning import PAGE_BREAK, clean_document
+            from yuxi.knowledge.cleaning import PAGE_BREAK
 
             params["page_separator"] = PAGE_BREAK
 
-            markdown_content = await parse_document(
+            markdown_content, cleaned_content, cleaning_report = await parse_knowledge_document(
                 source=file_path,
                 params=params,
+                kb_id=kb_id,
+                file_id=file_id,
             )
 
             # Save Markdown to MinIO
             markdown_file_path = await self._save_markdown_to_minio(kb_id, file_id, markdown_content)
-            cleaned_content, cleaning_report = clean_document(markdown_content)
 
             # Update metadata
             file_meta["status"] = FileStatus.PARSED

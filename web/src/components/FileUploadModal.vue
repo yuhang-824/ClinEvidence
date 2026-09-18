@@ -58,7 +58,7 @@
             <p class="param-description">选择文件保存的目标文件夹</p>
           </div>
           <div class="col-item">
-            <div class="setting-label">OCR 引擎（仅应用于 PDF/图片文件）</div>
+            <div class="setting-label">图片 OCR 引擎（PDF 固定使用 Docling）</div>
             <div class="setting-content">
               <OCRSelector
                 v-model="processingParams.ocr_engine"
@@ -74,7 +74,10 @@
       <!-- PDF/图片OCR提醒 (Alert样式优化) -->
       <div v-if="hasPdfOrImageFiles && !isOcrEnabled" class="inline-alert warning">
         <Info :size="16" />
-        <span>检测到PDF或图片文件，建议启用 OCR 以提取文本内容</span>
+        <span
+          >PDF 使用本地 Docling 解析版面、表格及扫描文字，解析后须逐页审核；图片使用所选 OCR
+          引擎。</span
+        >
       </div>
 
       <!-- 文件上传区域 -->

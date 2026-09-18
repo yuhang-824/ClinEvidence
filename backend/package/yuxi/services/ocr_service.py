@@ -79,7 +79,7 @@ async def parse_document(
 ) -> str:
     """使用当前运行时配置将文件解析为 Markdown。
 
-    这是业务代码唯一应调用的文档解析入口。函数负责区分应用层配置解析和
+    这是通用附件解析入口；知识库使用 parse_knowledge_document 保留 PDF 结构。函数负责区分应用层配置解析和
     底层文件转换：对于 PDF 与图片等 OCR 文件，先确定最终 OCR 引擎，再从
     数据库 Options、环境变量或模型供应商中解析该引擎的构造参数；对于普通
     文本、Office、表格等文件，参数保持原样并直接交给统一解析器。
@@ -116,6 +116,44 @@ async def parse_document(
     from yuxi.knowledge.parser.unified import parse_resolved_document
 
     return await parse_resolved_document(source=source, params=resolved_params)
+
+
+async def parse_knowledge_document(source, params, *, kb_id, file_id):
+    """知识库 PDF 保存不可变结构原件，其他文档沿用清洗链路。"""
+    import json
+    import tempfile
+    import uuid
+
+    from yuxi.knowledge.cleaning import clean_document
+    from yuxi.knowledge.structure import structure_report
+    from yuxi.knowledge.utils.kb_utils import parse_minio_url
+    from yuxi.storage.minio import get_minio_client
+
+    if Path(source.split("?", 1)[0]).suffix.lower() != ".pdf":
+        raw = await parse_document(source=source, params=params)
+        content, report = clean_document(raw)
+        return raw, content, report
+    from yuxi.knowledge.parser.docling_pdf import parse_structured_pdf
+
+    client = get_minio_client()
+    bucket, key = parse_minio_url(source)
+    data = await client.adownload_file(bucket, key)
+    with tempfile.TemporaryDirectory(prefix="knowledge-pdf-") as folder:
+        path = Path(folder) / "source.pdf"
+        await asyncio.to_thread(path.write_bytes, data)
+        document, raw, structure = await asyncio.to_thread(parse_structured_pdf, path)
+    if len(raw) > 2_000_000 or len(structure["blocks"]) > 20000:
+        raise ValueError("文档超过结构审核上限，请先拆分 PDF")
+    object_name = f"{kb_id}/structure/{file_id}/{uuid.uuid4().hex}.json"
+    uploaded = await client.aupload_file(
+        bucket_name=client.KB_BUCKETS["parsed"],
+        object_name=object_name,
+        data=json.dumps(document, ensure_ascii=False).encode(),
+        content_type="application/json",
+    )
+    structure["original_json"] = uploaded.url
+    content, report = structure_report(structure)
+    return raw, content, report
 
 
 async def check_all_ocr_health(db: AsyncSession) -> dict[str, Any]:
