@@ -19,6 +19,25 @@ class TextBox:
     bottom: float
 
 
+def _column_gutter(gaps, width, min_support):
+    """以空隙端点分区寻找多行共有栏缝，避免短行中点偏移。"""
+    events = {}
+    for left, right in gaps:
+        events[left] = events.get(left, 0) + 1
+        events[right] = events.get(right, 0) - 1
+    points = sorted(events)
+    support = 0
+    best = None
+    for left, right in zip(points, points[1:]):
+        support += events[left]
+        center = (left + right) / 2
+        if support >= min_support:
+            candidate = (support, -abs(center - width / 2), center)
+            if best is None or candidate > best:
+                best = candidate
+    return best[2] if best else None
+
+
 def image_rules(image):
     """从扫描图检测水平和垂直表格线，坐标保持像素单位。"""
     import cv2
@@ -84,6 +103,18 @@ def native_text_boxes(page) -> list[TextBox]:
         else:
             rows[-1][1].append(char)
     boxes = []
+    # 栏边界由多行重复空隙确认；个别行末标点伸入栏间时不能合成跨栏块。
+    gaps = []
+    for _, row in rows:
+        ordered = sorted(row, key=lambda c: c["x0"])
+        for left, right in zip(ordered, ordered[1:]):
+            center = (left["x1"] + right["x0"]) / 2
+            if (
+                right["x0"] - left["x1"] >= max(6, min(left["size"], right["size"]) * 0.75)
+                and page.width * 0.3 < center < page.width * 0.7
+            ):
+                gaps.append((left["x1"], right["x0"]))
+    gutter = _column_gutter(gaps, page.width, max(3, len(rows) * 0.4))
     vertical_edges = [e for e in page.edges if e["orientation"] == "v"]
     for _, row in rows:
         runs = []
@@ -93,7 +124,18 @@ def native_text_boxes(page) -> list[TextBox]:
                 and edge["top"] <= char["bottom"] <= edge["bottom"] + 2
                 for edge in vertical_edges
             )
-            if not runs or crosses_cell or char["x0"] - runs[-1][-1]["x1"] > max(12, page.width * 0.018):
+            crosses_gutter = (
+                runs
+                and gutter is not None
+                and runs[-1][-1]["x1"] < gutter < char["x0"]
+                and char["x0"] - runs[-1][-1]["x1"] >= max(6, char["size"] * 0.75)
+            )
+            if (
+                not runs
+                or crosses_cell
+                or crosses_gutter
+                or char["x0"] - runs[-1][-1]["x1"] > max(12, page.width * 0.018)
+            ):
                 runs.append([char])
             else:
                 runs[-1].append(char)
@@ -318,14 +360,14 @@ def reading_order(boxes, width) -> list[TextBox]:
     """跨栏区域分段；明显双栏区域先左后右，单栏保持行序。"""
     mid = width / 2
     gaps = [
-        (left.x1 + right.x0) / 2
+        (left.x1, right.x0)
         for row in group_rows(boxes)
         for left, right in zip(row, row[1:])
-        if right.x0 - left.x1 > 12 and width * 0.3 < (left.x1 + right.x0) / 2 < width * 0.7
+        if right.x0 - left.x1 >= 6 and width * 0.3 < (left.x1 + right.x0) / 2 < width * 0.7
     ]
     if len(gaps) >= 2:
-        candidate = max(gaps, key=lambda gap: sum(abs(other - gap) < width * 0.03 for other in gaps))
-        mid = median(gap for gap in gaps if abs(gap - candidate) < width * 0.03)
+        # 短行的空白较宽，中点不是栏边界；优先选择最多行共同经过的空隙。
+        mid = _column_gutter(gaps, width, 2) or mid
     spans = sorted([b for b in boxes if b.x0 < mid - 8 and b.x1 > mid + 8], key=lambda b: b.top)
     remaining = [b for b in boxes if b not in spans]
     result = []

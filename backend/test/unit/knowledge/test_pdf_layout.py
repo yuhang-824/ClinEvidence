@@ -344,3 +344,75 @@ def test_cyclic_form_parent_is_rejected():
     page = SimpleNamespace(annots=[{"data": {"Subtype": PSLiteral("Widget"), "Parent": parent}}])
     with pytest.raises(ValueError, match="父级循环"):
         form_fields(page)
+
+
+def build_narrow_gutter_pdf(path):
+    """构造窄栏间距、左下标题与右上续文的独立阅读顺序样例。"""
+    from pypdf import PdfReader
+    from pypdf.generic import DecodedStreamObject, NameObject
+    from pypdf import PdfWriter
+
+    build_layout_pdf(path)
+    writer = PdfWriter(clone_from=PdfReader(path))
+    stream = DecodedStreamObject()
+    commands = []
+    # Courier 每字符 6 点；36字符由 x=72 延伸到288，右栏由298开始，间距仅10点。
+    lines = [
+        ("A FULL WIDTH HEADING" * 4, 40, 770),
+        ("LEFT SECTION FOUR FIRST", 72, 730),
+        ("RIGHT SECTION FIVE CONTINUATION", 298, 730),
+        ("LEFT SECTION FOUR MIDDLE", 72, 710),
+        ("RIGHT SECTION FIVE TRIAL ONE", 298, 710),
+        ("L" * 36, 72, 690),
+        ("RIGHT SHORT", 298, 690),
+        ("LEFT SECTION FOUR END", 72, 670),
+        ("RIGHT SECTION FIVE TRIAL TWO", 298, 670),
+        ("5 SECTION FIVE TITLE", 72, 650),
+        ("RIGHT SECTION FIVE CONCLUSION", 298, 650),
+        ("LEFT SECTION FIVE START", 72, 630),
+    ]
+    page = writer.pages[0]
+    page["/Resources"]["/Font"]["/F1"][NameObject("/BaseFont")] = NameObject("/Courier")
+    for text, x, y in lines:
+        commands.append(f"BT /F1 10 Tf {x} {y} Td ({text}) Tj ET")
+    stream.set_data("\n".join(commands).encode())
+    page[NameObject("/Contents")] = writer._add_object(stream)
+    writer.write(path)
+
+
+def test_native_narrow_gutter_does_not_move_continuation_before_section(tmp_path):
+    """短于旧阈值的栏间距不能制造跨栏块，把下一节续文移到标题前。"""
+    from yuxi.knowledge.parser.pdf_layout import parse_local_pdf
+
+    path = tmp_path / "narrow-gutter.pdf"
+    build_narrow_gutter_pdf(path)
+    result = parse_local_pdf(path)
+    expected = [
+        "A FULL WIDTH HEADING" * 4,
+        "LEFT SECTION FOUR FIRST",
+        "LEFT SECTION FOUR MIDDLE",
+        "L" * 36,
+        "LEFT SECTION FOUR END",
+        "5 SECTION FIVE TITLE",
+        "LEFT SECTION FIVE START",
+        "RIGHT SECTION FIVE CONTINUATION",
+        "RIGHT SECTION FIVE TRIAL ONE",
+        "RIGHT SHORT",
+        "RIGHT SECTION FIVE TRIAL TWO",
+        "RIGHT SECTION FIVE CONCLUSION",
+    ]
+    assert result.split("\n\n") == expected
+
+
+def test_varying_indents_use_shared_gutter_instead_of_gap_midpoints():
+    """短行和右栏缩进变化时，真实共同栏缝不一定包含任何空隙中点。"""
+    from yuxi.knowledge.parser.pdf_layout import reading_order
+
+    boxes = []
+    for i, (left_end, right_start) in enumerate(
+        [(220, 305), (220, 410), (260, 305), (295, 330), (285, 330), (220, 305)]
+    ):
+        boxes.extend(
+            [box(f"L{i}", 40, 20 + 20 * i, left_end - 40), box(f"R{i}", right_start, 20 + 20 * i, 560 - right_start)]
+        )
+    assert [b.text for b in reading_order(boxes, 600)] == [f"L{i}" for i in range(6)] + [f"R{i}" for i in range(6)]

@@ -45,7 +45,8 @@ class EmbeddingStub(BaseHTTPRequestHandler):
 
 async def test_pdf_upload_parse_index_retrieve_delete_without_graph(tmp_path):
     """无图谱服务时，合成 PDF 可经真实 worker 入库并回读来源。"""
-    from test.unit.knowledge.test_pdf_layout import build_layout_pdf
+    from test.unit.knowledge.test_pdf_layout import build_layout_pdf, build_narrow_gutter_pdf
+    from pypdf import PdfWriter
 
     pg_manager.initialize()
     suffix = uuid.uuid4().hex[:12]
@@ -107,6 +108,12 @@ async def test_pdf_upload_parse_index_retrieve_delete_without_graph(tmp_path):
             kb_id = database['kb_id']
             pdf = Path(tmp_path) / 'scope.pdf'
             build_layout_pdf(pdf)
+            narrow = Path(tmp_path) / 'narrow.pdf'
+            build_narrow_gutter_pdf(narrow)
+            combined = PdfWriter()
+            combined.append(pdf)
+            combined.append(narrow)
+            combined.write(pdf)
             upload = await request('POST', f'/api/knowledge/files/upload?kb_id={kb_id}',
                                    files={'file': ('scope.pdf', pdf.read_bytes(), 'application/pdf')})
             submitted = await request('POST', f'/api/knowledge/databases/{kb_id}/documents', json={
@@ -128,7 +135,8 @@ async def test_pdf_upload_parse_index_retrieve_delete_without_graph(tmp_path):
                 file_id = files[0].file_id
             review_url = f'/api/knowledge/databases/{kb_id}/documents/{file_id}/review'
             review = await request('GET', review_url)
-            assert review['revisions'][0]['raw_content']
+            raw = review['revisions'][0]['raw_content']
+            assert raw.index('LEFT SECTION FOUR END') < raw.index('5 SECTION FIVE TITLE') < raw.index('LEFT SECTION FIVE START') < raw.index('RIGHT SECTION FIVE CONTINUATION') < raw.index('RIGHT SECTION FIVE CONCLUSION')
             assert review['revisions'][0]['approved_at'] is None
             async with pg_manager.get_async_session_context() as session:
                 await session.execute(update(User).where(User.id == user.id).values(role='user'))
@@ -187,7 +195,9 @@ async def test_pdf_upload_parse_index_retrieve_delete_without_graph(tmp_path):
                 file = await session.scalar(select(KnowledgeFile).where(KnowledgeFile.file_id == file_id))
                 chunks = list(await session.scalars(select(KnowledgeChunk).where(KnowledgeChunk.file_id == file_id)))
                 assert file.status == 'indexed', task
-                assert 'AUDITED CONTENT MARKER' in '\n'.join(c.content for c in chunks)
+                indexed_text = '\n'.join(c.content for c in chunks)
+                assert 'AUDITED CONTENT MARKER' in indexed_text
+                assert indexed_text.index('5 SECTION FIVE TITLE') < indexed_text.index('RIGHT SECTION FIVE CONTINUATION') < indexed_text.index('RIGHT SECTION FIVE CONCLUSION')
                 chunks.sort(key=lambda c: c.chunk_index)
                 assert [c.content for c in chunks] == [c['content'] for c in preview['chunks']]
                 assert all(c.source_metadata['revision'] == 3 for c in chunks)
