@@ -218,3 +218,57 @@ def test_manual_can_split_oversized_structure():
     assert len(chunks) == 2
     with pytest.raises(ValueError, match="存储上限"):
         chunk_mixed(text, "f", "f.pdf", {}, revision={"report": {"chunk_boundaries": []}})
+
+
+def test_nested_headings_travel_with_body_as_full_path():
+    """小标题连同全部上级标题进入正文片段，层级标记不替代路径。"""
+    text = (
+        "# 1 共识制定方法及流程\n\n本共识的制定遵循 2014 年版手册。\n\n"
+        "## 1.1 确定临床问题\n\n在确定临床问题及编写共识的过程中，专家组提出临床问题。\n\n"
+        "### 1.1.1 证据评价\n\n采用 GRADE 系统进行评价。"
+    )
+    chunks = chunk_mixed(text, "f", "f.pdf", {})
+    assert [c["source_metadata"]["section"] for c in chunks] == [
+        ["1 共识制定方法及流程"],
+        ["1 共识制定方法及流程", "1.1 确定临床问题"],
+        ["1 共识制定方法及流程", "1.1 确定临床问题", "1.1.1 证据评价"],
+    ]
+    assert chunks[1]["content"] == (
+        "# 1 共识制定方法及流程\n\n## 1.1 确定临床问题\n\n在确定临床问题及编写共识的过程中，专家组提出临床问题。"
+    )
+    for chunk in chunks:
+        for title in chunk["source_metadata"]["section"]:
+            assert title in chunk["content"]
+
+
+def test_heading_never_becomes_standalone_chunk():
+    """没有任何正文的标题不进索引：同级标题、文末标题和纯标题文档都不产生空块。"""
+    sibling = "# 概述\n\n# 方法\n\n纳入标准：确诊患者。"
+    chunks = chunk_mixed(sibling, "f", "f.pdf", {})
+    assert len(chunks) == 1
+    assert chunks[0]["content"] == "# 方法\n\n纳入标准：确诊患者。"
+    assert chunks[0]["source_metadata"]["section"] == ["方法"]
+
+    trailing = "# 1 方法\n\n纳入标准：确诊患者。\n\n# 参考文献\n"
+    chunks = chunk_mixed(trailing, "f", "f.pdf", {})
+    assert [c["content"] for c in chunks] == ["# 1 方法\n\n纳入标准：确诊患者。"]
+
+    only_heading = "# 只有标题"
+    chunks = chunk_mixed(only_heading, "f", "f.pdf", {})
+    assert len(chunks) == 1
+    assert chunks[0]["content"] == "# 只有标题"
+    assert chunks[0]["source_metadata"]["kind"] == "paragraph"
+
+
+def test_automatic_chunks_are_never_heading_kind():
+    """自动切片不产出标题类型片段，标题只能作为正文上下文出现。"""
+    text = (
+        "# 1 总则\n\n## 1.1 范围\n\n本共识适用于妇科医师。\n\n"
+        "# 2 定义\n\n无铂间隔是预测指标。\n\n# 附录"
+    )
+    chunks = chunk_mixed(text, "f", "f.pdf", {})
+    assert len(chunks) == 2
+    assert all(c["source_metadata"]["kind"] != "heading" for c in chunks)
+    assert all(
+        any(line.lstrip().startswith("# ") for line in c["content"].splitlines()) for c in chunks
+    )

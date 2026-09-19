@@ -168,7 +168,7 @@ def chunk_mixed(text: str, file_id: str, filename: str, config: dict, *, revisio
             continue
         if level:
             headings = [h for h in headings if h[0] < level]
-            emit(offsets[i], offsets[i + 1], "heading")
+            # 标题只作为后续正文的上下文；没有任何正文的标题不进索引。
             headings.append((level, offsets[i], offsets[i + 1]))
             i += 1
             continue
@@ -270,20 +270,6 @@ def chunk_mixed(text: str, file_id: str, filename: str, config: dict, *, revisio
     if not chunks and text.strip():
         headings = []
         emit(0, len(text), "paragraph")
-    # 已作为正文上下文携带的标题不再成为独立检索碎片，孤立标题仍保留。
-    carried = {
-        (s["start"], s["end"])
-        for c in chunks
-        if c["source_metadata"]["kind"] != "heading"
-        for s in c["source_metadata"]["spans"]
-        if s["role"] == "context"
-    }
-    chunks = [
-        c
-        for c in chunks
-        if c["source_metadata"]["kind"] != "heading"
-        or not any(a <= c["start_char_pos"] and c["end_char_pos"] <= b for a, b in carried)
-    ]
     boundaries = (revision or {}).get("report", {}).get("chunk_boundaries")
     if boundaries is not None:
         validate_boundaries(text, boundaries)
