@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, reactive } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import { databaseApi, documentApi, queryApi } from '@/apis/knowledge_api'
 import { useTaskerStore } from '@/stores/tasker'
@@ -13,6 +13,10 @@ import { canSelectFile, isProcessingFile } from '@/utils/knowledge_file_policy'
 const AUTO_REFRESH_POLL_INTERVAL_MS = 10000
 const AUTO_REFRESH_MAX_INTERVAL_MS = 30000
 const AUTO_REFRESH_STALE_POLLS_LIMIT = 6
+
+// 文件记录由 worker 在知识库任务执行中创建；任务活跃即代表列表内容即将变化
+const ACTIVE_TASK_STATUSES = new Set(['pending', 'queued', 'running'])
+const KNOWLEDGE_TASK_TYPES = new Set(['knowledge_ingest', 'knowledge_parse', 'knowledge_index'])
 
 export const useDatabaseStore = defineStore('database', () => {
   const router = useRouter()
@@ -64,6 +68,16 @@ export const useDatabaseStore = defineStore('database', () => {
   let refreshIntervalMs = AUTO_REFRESH_POLL_INTERVAL_MS
   let refreshLastProcessingCount = null
   let fileBrowserContextId = 0
+
+  // 当前知识库仍在执行中的知识库任务；payload 缺少 kb_id 时（旧任务）按活跃处理
+  const hasActiveKnowledgeTask = computed(() =>
+    taskerStore.tasks.some(
+      (task) =>
+        KNOWLEDGE_TASK_TYPES.has(task.type) &&
+        ACTIVE_TASK_STATUSES.has(task.status) &&
+        (!task.payload?.kb_id || task.payload.kb_id === kbId.value)
+    )
+  )
 
   function setCurrentFileMap(items = []) {
     database.value = {
@@ -335,7 +349,8 @@ export const useDatabaseStore = defineStore('database', () => {
 
     const files = Array.isArray(filesMap) ? filesMap : Object.values(filesMap || {})
     const hasPending = files.some((file) => isProcessingFile(file))
-    if (hasPending) {
+    // 任务执行中文件记录可能尚未由 worker 创建，列表为空不代表没有处理在进行
+    if (hasPending || hasActiveKnowledgeTask.value) {
       enableAutoRefresh('auto')
     } else if (autoRefreshSource === 'auto' && state.autoRefresh) {
       state.autoRefresh = false
@@ -723,9 +738,13 @@ export const useDatabaseStore = defineStore('database', () => {
     if (generation !== refreshGeneration) return
     if (!state.autoRefresh) return
 
-    // 处理中文件数量持续不变则按 2 倍退避，达到上限仍无进展即自动停止（覆盖僵尸状态）
     const processingCount = Number(database.value?.stats?.processing_count || 0)
-    if (processingCount === refreshLastProcessingCount) {
+    // 处理中文件数量持续不变则按 2 倍退避，达到上限仍无进展即自动停止（覆盖僵尸状态）；
+    // 本知识库还有执行中的知识库任务时不退避，文件记录随时会由 worker 创建
+    if (hasActiveKnowledgeTask.value) {
+      refreshStablePolls = 0
+      refreshIntervalMs = AUTO_REFRESH_POLL_INTERVAL_MS
+    } else if (processingCount === refreshLastProcessingCount) {
       refreshStablePolls += 1
       refreshIntervalMs = Math.min(refreshIntervalMs * 2, AUTO_REFRESH_MAX_INTERVAL_MS)
     } else {
@@ -815,6 +834,17 @@ export const useDatabaseStore = defineStore('database', () => {
 
     return ''
   }
+
+  // 任务结束的最终状态不等下一个轮询周期：活跃知识库任务消失且自动轮询仍开启时立即补一次后台刷新，
+  // 刷新中的 ensureAutoRefreshForProcessing 会因无处理中文件且无活跃任务而自动停止轮询
+  watch(hasActiveKnowledgeTask, (active, previous) => {
+    if (previous && !active && state.autoRefresh && userStore.token) {
+      void Promise.all([
+        getDatabaseInfo(undefined, true, true),
+        loadDocumentFiles({ isBackground: true })
+      ])
+    }
+  })
 
   return {
     databases,

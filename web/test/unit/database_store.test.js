@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { createPinia, setActivePinia } from 'pinia'
-import { createApp } from 'vue'
+import { createApp, nextTick } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { createServer } from 'vite'
 import { message } from 'ant-design-vue'
@@ -137,6 +137,86 @@ test('知识库提交跨账号返回时，不把旧入队任务登记给新账�
   } finally {
     database.stopAutoRefresh()
     tasker.$dispose()
+    await server.close()
+  }
+})
+
+test('知识库任务执行期间文件列表自动刷新保持存活，任务结束后补刷新并自动停止', async (t) => {
+  const server = await createServer({
+    server: { middlewareMode: true, hmr: false },
+    appType: 'custom'
+  })
+  const pinia = createPinia()
+  const app = createApp({})
+  app.use(pinia)
+  app.use(createRouter({ history: createMemoryHistory(), routes: [] }))
+  setActivePinia(pinia)
+  const { documentApi, databaseApi } = await server.ssrLoadModule('/src/apis/knowledge_api.js')
+  const { useDatabaseStore } = await server.ssrLoadModule('/src/stores/database.js')
+  const { useUserStore } = await server.ssrLoadModule('/src/stores/user.js')
+  const { useTaskerStore } = await server.ssrLoadModule('/src/stores/tasker.js')
+  const database = app.runWithContext(() => useDatabaseStore())
+  const user = useUserStore()
+  const tasker = useTaskerStore()
+  user.token = 'token-live'
+  user.userRole = 'admin'
+  t.mock.method(message, 'success', () => {})
+
+  let stats = { processing_count: 0 }
+  let files = []
+  let infoCalls = 0
+  t.mock.method(databaseApi, 'getDatabaseInfo', async () => {
+    infoCalls += 1
+    return { stats, files: {} }
+  })
+  t.mock.method(documentApi, 'listDocuments', async () => ({
+    items: files,
+    page: 1,
+    page_size: 100,
+    total: files.length,
+    has_more: false,
+    path_prefix: ''
+  }))
+  t.mock.method(documentApi, 'addDocuments', async () => ({
+    status: 'queued',
+    task_id: 'task_live',
+    message: '任务已提交'
+  }))
+
+  try {
+    database.kbId = 'kb_live'
+
+    // 上传入队：任务先于 worker 创建的文件记录存在
+    const pending = database.addFiles({ items: ['a.pdf'], contentType: 'file', params: {} })
+    assert.equal(await pending, true)
+    assert.equal(
+      tasker.tasks.some((task) => task.id === 'task_live' && task.status === 'queued'),
+      true
+    )
+    // 1 秒后的延迟刷新拿到空列表且 stats 无处理中，自动刷新不得被关闭
+    assert.equal(database.state.autoRefresh, true)
+
+    // worker 创建文件记录并开始解析，存活的自动刷新无需手动刷新即可取到
+    files = [{ file_id: 'file_1', filename: 'a.pdf', status: 'parsing' }]
+    stats = { processing_count: 1 }
+    await database.getDatabaseInfo(undefined, true, true)
+    await database.loadDocumentFiles({ isBackground: true })
+    assert.equal(database.documentFiles[0]?.status, 'parsing')
+    assert.equal(database.state.autoRefresh, true)
+
+    // 任务结束：立即补一次后台刷新拿到最终状态，随后自动停止轮询
+    files = [{ file_id: 'file_1', filename: 'a.pdf', status: 'done' }]
+    stats = { processing_count: 0 }
+    const infoCallsBefore = infoCalls
+    tasker.tasks[0].status = 'success'
+    await nextTick()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.ok(infoCalls > infoCallsBefore)
+    assert.equal(database.documentFiles[0]?.status, 'done')
+    assert.equal(database.state.autoRefresh, false)
+  } finally {
+    database.stopAutoRefresh()
+    tasker.reset()
     await server.close()
   }
 })
