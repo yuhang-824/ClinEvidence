@@ -1274,12 +1274,23 @@ async def query_test(
     logger.debug(f"Query test in {kb_id}: {query}")
     try:
         result = await knowledge_base.aquery(query, kb_id=kb_id, **meta)
-        return result
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"测试查询失败 {e}, {traceback.format_exc()}")
         return {"message": f"测试查询失败: {e}", "status": "failed"}
+
+    # 与 MilvusKB.aquery 的参数合并方式保持一致，回显本次实际生效的检索模式
+    mode = "vector"
+    try:
+        config = await knowledge_base.get_kb_config(kb_id)
+        merged = {**config.query_options, **meta}
+        mode = str(merged.get("search_mode", "vector")).lower()
+    except Exception as e:
+        logger.debug(f"解析检索模式失败，回退默认: {e}")
+    if mode not in {"vector", "keyword", "hybrid"}:
+        mode = "vector"
+    return {"search_mode": mode, "results": result}
 
 
 @knowledge.put("/databases/{kb_id}/query-params")

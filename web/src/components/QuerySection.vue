@@ -53,13 +53,16 @@
             </div>
 
             <!-- Milvus 返回列表格式 -->
-            <div v-else-if="Array.isArray(queryResult)" class="result-list">
-              <div v-if="queryResult.length === 0" class="no-results">
+            <div v-else-if="resultChunks" class="result-list">
+              <div v-if="resultChunks.length === 0" class="no-results">
                 <p>未找到相关结果</p>
               </div>
               <div v-else>
                 <div class="result-summary">
-                  <span>检索到 {{ queryResult.length }} 个相关文档块：</span>
+                  <div class="summary-left">
+                    <span>检索到 {{ resultChunks.length }} 个相关文档块：</span>
+                    <span v-if="resultMode" class="mode-badge">{{ modeLabel }}</span>
+                  </div>
                   <a-button
                     type="text"
                     size="small"
@@ -69,7 +72,7 @@
                     清空
                   </a-button>
                 </div>
-                <div v-for="(chunk, index) in queryResult" :key="index" class="result-item">
+                <div v-for="(chunk, index) in resultChunks" :key="index" class="result-item">
                   <div class="result-header">
                     <span class="result-index">#{{ index + 1 }}</span>
                     <span v-if="chunk.score" class="result-score">
@@ -100,6 +103,11 @@
                   </div>
                 </div>
               </div>
+            </div>
+
+            <!-- 检索失败的错误响应 -->
+            <div v-else-if="queryResult?.status === 'failed'" class="result-unknown">
+              <pre>{{ queryResult.message }}</pre>
             </div>
 
             <!-- 其他格式（降级处理） -->
@@ -182,6 +190,22 @@ defineEmits(['toggleVisible'])
 const searchLoading = computed(() => store.state.searchLoading)
 const queryResult = ref('')
 const showRawData = ref(false)
+// 检索测试响应：{search_mode, results}；旧后端或失败响应分别回退数组与错误文案
+const resultChunks = computed(() => {
+  if (Array.isArray(queryResult.value)) return queryResult.value
+  if (Array.isArray(queryResult.value?.results)) return queryResult.value.results
+  return null
+})
+const resultMode = computed(() => {
+  if (Array.isArray(queryResult.value)) return null
+  return queryResult.value?.search_mode || null
+})
+const MODE_LABELS = {
+  vector: '向量检索',
+  keyword: 'BM25 全文检索',
+  hybrid: '混合检索（向量 + BM25）'
+}
+const modeLabel = computed(() => MODE_LABELS[resultMode.value] || resultMode.value)
 const showQuerySuggestions = computed(() => !searchLoading.value && !queryResult.value)
 
 // 示例问题生成属于写操作，仅对拥有管理权限（非只读权限）的知识库开放
@@ -519,8 +543,27 @@ defineExpose({
       border-radius: 6px;
       color: var(--gray-800);
       font-size: 13px;
-      span {
+
+      .summary-left {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+
+        span {
+          font-weight: 500;
+        }
+      }
+
+      .mode-badge {
+        padding: 2px 8px;
+        border: 1px solid var(--main-200);
+        border-radius: 10px;
+        background-color: var(--main-100);
+        color: var(--main-800);
+        font-size: 12px;
         font-weight: 500;
+        white-space: nowrap;
       }
     }
 
