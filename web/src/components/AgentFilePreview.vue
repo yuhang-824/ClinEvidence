@@ -209,7 +209,7 @@
         </div>
       </template>
       <template v-else-if="file?.previewType === 'pdf' && file?.previewUrl">
-        <PdfPreview :url="file.previewUrl" class="pdf-preview" />
+        <PdfPreview :url="file.previewUrl" :initial-page="initialPage" class="pdf-preview" />
       </template>
       <template v-else-if="isHtmlFile && htmlPreviewMode === 'render'">
         <iframe
@@ -324,7 +324,7 @@
               </div>
             </template>
             <template v-else-if="file?.previewType === 'pdf' && file?.previewUrl">
-              <PdfPreview :url="file.previewUrl" class="pdf-preview fullscreen-embed-preview" />
+              <PdfPreview :url="file.previewUrl" :initial-page="initialPage" class="pdf-preview fullscreen-embed-preview" />
             </template>
             <template v-else-if="isHtmlFile && htmlPreviewMode === 'render'">
               <iframe
@@ -401,6 +401,11 @@ const props = defineProps({
   filePath: {
     type: String,
     default: ''
+  },
+  // PDF 预览打开后定位到的页码（引用跳转）；0 表示不指定
+  initialPage: {
+    type: Number,
+    default: 0
   },
   status: {
     type: String,

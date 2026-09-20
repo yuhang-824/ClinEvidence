@@ -7,6 +7,7 @@
       { 'is-dark': themeStore.isDark, 'is-compact': compact }
     ]"
     @click="handleMarkdownAction"
+    @keydown="handleMarkdownAction"
   ></div>
 </template>
 
@@ -15,6 +16,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useThemeStore } from '@/stores/theme'
 import { useUserStore } from '@/stores/user'
 import { renderMarkdown } from '@/utils/markdown_preview'
+import { citationFromAttributes, stripIncompleteCitation } from '@/utils/citation'
 import { HTML_PREVIEW_MAX_HEIGHT, HTML_PREVIEW_MIN_HEIGHT } from '@/utils/htmlPreviewRenderer'
 import 'katex/dist/katex.min.css'
 const props = defineProps({
@@ -31,6 +33,8 @@ const props = defineProps({
     default: false
   }
 })
+
+const emit = defineEmits(['cite-click'])
 
 const themeStore = useThemeStore()
 const userStore = useUserStore()
@@ -315,6 +319,26 @@ const enhanceHtmlPreviews = () => {
   })
 }
 
+// === 回答引用标记（knowledge-base Skill 约定）===
+// 正文由 innerHTML 注入，引用元素只能用事件委托与 DOM 增强，不能挂 Vue 组件。
+const CITE_ACTIVATION_KEYS = new Set(['Enter', ' '])
+
+const enhanceCitations = () => {
+  const root = previewRef.value
+  if (!root) return
+
+  root.querySelectorAll('cite[source]').forEach((cite) => {
+    if (cite.dataset.citationReady) return
+    cite.dataset.citationReady = 'true'
+    cite.classList.add('citation-chip')
+    cite.setAttribute('role', 'button')
+    cite.setAttribute('tabindex', '0')
+    const source = cite.getAttribute('source')
+    const page = cite.getAttribute('data-page')
+    cite.setAttribute('title', page ? `${source} · PDF 第 ${page} 页` : String(source))
+  })
+}
+
 const revokeKbImageBlobUrls = () => {
   kbImageBlobUrls.forEach((url) => URL.revokeObjectURL(url))
   kbImageBlobUrls.clear()
@@ -357,6 +381,7 @@ onMounted(async () => {
   await nextTick()
   enhanceHtmlPreviews()
   enhanceKbImages()
+  enhanceCitations()
   if (props.codeCopy) enhanceCodeBlocks()
 })
 
@@ -383,7 +408,7 @@ watch(
       return
     }
 
-    const html = await renderMarkdown(content, { theme })
+    const html = await renderMarkdown(stripIncompleteCitation(content), { theme })
     if (!expired) {
       replaceHtmlPreservingPreviews(html)
       revokeKbImageBlobUrls()
@@ -393,6 +418,7 @@ watch(
       if (expired) return
       enhanceHtmlPreviews()
       enhanceKbImages()
+      enhanceCitations()
       if (codeCopy) enhanceCodeBlocks()
       cleanupHtmlPreviewFrames()
     }
@@ -408,6 +434,20 @@ const handleMarkdownAction = async (e) => {
   const codeCopyBtn = target.closest('.markdown-code-copy-btn')
   if (codeCopyBtn) {
     await copyCodeBlock(codeCopyBtn)
+    return
+  }
+
+  const cite = target.closest('cite[source]')
+  if (cite) {
+    if (e.type === 'keydown') {
+      if (!CITE_ACTIVATION_KEYS.has(e.key)) return
+      e.preventDefault()
+    }
+    const citation = citationFromAttributes({
+      source: cite.getAttribute('source'),
+      page: cite.getAttribute('data-page')
+    })
+    if (citation) emit('cite-click', citation)
     return
   }
 
@@ -638,51 +678,38 @@ const showCopiedFeedback = (btn) => {
     color: var(--gray-700);
   }
 
+  // 回答引用：品牌色胶囊 + 页码，形状与文字都与正文区分（不只靠颜色）
   cite {
-    position: relative;
-    margin: 0 4px;
-    padding: 0 0.25rem;
-    border-radius: 4px;
-    outline: 2px solid var(--gray-100);
-    background-color: var(--gray-100);
-    color: var(--gray-800);
+    margin: 0 3px;
+    padding: 0 6px;
+    border: 1px solid var(--main-200);
+    border-radius: 999px;
+    background-color: var(--main-50);
+    color: var(--main-700);
     font-size: 12px;
     font-style: normal;
+    font-weight: 500;
+    line-height: 1.5;
+    white-space: nowrap;
     cursor: pointer;
     user-select: none;
 
-    &:hover::after {
-      content: attr(source);
-      position: absolute;
-      bottom: calc(100% + 6px);
-      left: 50%;
-      z-index: 1000;
-      width: max-content;
-      min-width: 100px;
-      max-width: 400px;
-      padding: 8px 12px;
-      border-radius: 6px;
-      transform: translateX(-50%);
-      background-color: #222;
-      color: #fff;
-      font-size: 13px;
-      line-height: 1.5;
-      text-align: center;
-      white-space: normal;
-      word-break: break-word;
-      pointer-events: none;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    &::after {
+      content: ' 第' attr(data-page) '页';
     }
 
-    &:hover::before {
-      content: '';
-      position: absolute;
-      bottom: 100%;
-      left: 50%;
-      z-index: 1000;
-      transform: translateX(-50%);
-      border: 5px solid transparent;
-      border-top-color: var(--gray-900);
+    // 历史片段与外部只读知识库没有页码，只显示来源序号
+    &:not([data-page])::after {
+      content: none;
+    }
+
+    &:hover {
+      background-color: var(--main-30);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--main-700);
+      outline-offset: 1px;
     }
   }
 

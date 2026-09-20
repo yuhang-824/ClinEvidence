@@ -1,3 +1,6 @@
+/** 内置知识库检索工具：结果按 kb_id 归组，而不是按工具名当作库名。 */
+const KNOWLEDGE_RETRIEVAL_TOOLS = new Set(['query_kb'])
+
 /** 解析工具返回的 JSON 内容。 */
 const parseToolResultContent = (content) => {
   if (Array.isArray(content)) return content
@@ -149,12 +152,16 @@ export class MessageProcessor {
   static extractKnowledgeChunksFromConversation(conv, databases = []) {
     if (!conv || !Array.isArray(conv.messages) || conv.messages.length === 0) return []
 
+    const kbNameById = new Map(
+      (databases || [])
+        .filter((db) => db?.kb_id && typeof db?.name === 'string' && db.name.trim())
+        .map((db) => [String(db.kb_id), db.name.trim()])
+    )
     const databaseNames = new Set(
       (databases || [])
         .map((db) => db?.name)
         .filter((name) => typeof name === 'string' && name.trim())
     )
-    if (databaseNames.size === 0) return []
 
     const normalizedChunks = []
     const dedupSet = new Set()
@@ -172,26 +179,46 @@ export class MessageProcessor {
       if (dedupSet.has(dedupKey)) return
       dedupSet.add(dedupKey)
 
-      const score = typeof chunk.score === 'number' ? chunk.score : null
+      // 内置检索工具把分数放在 metadata 里（SearchResultSchema 顶层只有内容与标识），
+      // 这里补齐顶层字段，来源列表才能按相关度排序并显示相似度/重排分
+      const score = typeof chunk.score === 'number' ? chunk.score : metadata.score
+      const rerankScore = typeof chunk.rerank_score === 'number' ? chunk.rerank_score : metadata.rerank_score
+      // 保留来源元数据：引用要展示页码与章节，来源面板也要能定位到 PDF 页
+      const sourceMetadata =
+        metadata.source_metadata && typeof metadata.source_metadata === 'object' ? metadata.source_metadata : null
       normalizedChunks.push({
         kb_name: kbName,
         content,
-        score,
+        score: typeof score === 'number' ? score : null,
+        ...(typeof rerankScore === 'number' ? { rerank_score: rerankScore } : {}),
         metadata: {
           source: metadata.source || '',
           file_id: metadata.file_id || '',
+          kb_id: chunk.kb_id || metadata.kb_id || '',
           chunk_id: metadata.chunk_id || '',
-          chunk_index: metadata.chunk_index
+          chunk_index: metadata.chunk_index,
+          ...(typeof score === 'number' ? { score } : {}),
+          ...(typeof rerankScore === 'number' ? { rerank_score: rerankScore } : {}),
+          ...(sourceMetadata ? { source_metadata: sourceMetadata } : {})
         }
       })
+    }
+
+    const labelFor = (chunk, fallback) => {
+      if (fallback) return fallback
+      const kbId = chunk?.kb_id || chunk?.metadata?.kb_id
+      if (!kbId) return '知识库'
+      return kbNameById.get(String(kbId)) || String(kbId)
     }
 
     for (const msg of conv.messages) {
       if (!msg || msg.type !== 'ai' || !Array.isArray(msg.tool_calls)) continue
 
       for (const toolCall of msg.tool_calls) {
-        const kbName = toolCall?.name || toolCall?.function?.name
-        if (!databaseNames.has(kbName)) continue
+        const toolName = toolCall?.name || toolCall?.function?.name
+        // 内置知识库检索工具按结果里的 kb_id 归组；外部只读知识库仍以工具名作为库名
+        const isRetrievalTool = KNOWLEDGE_RETRIEVAL_TOOLS.has(toolName)
+        if (!isRetrievalTool && !databaseNames.has(toolName)) continue
 
         const content = toolCall?.tool_call_result?.content
         const parsed = parseToolResultContent(content)
@@ -199,13 +226,19 @@ export class MessageProcessor {
 
         // Milvus / Dify: 直接是 chunks 数组
         if (Array.isArray(parsed)) {
-          for (const chunk of parsed) appendChunk(chunk, kbName)
+          for (const chunk of parsed) appendChunk(chunk, labelFor(chunk, isRetrievalTool ? '' : toolName))
           continue
         }
 
         const wrappedChunks = parsed?.data?.chunks
         if (Array.isArray(wrappedChunks)) {
-          for (const chunk of wrappedChunks) appendChunk(chunk, kbName)
+          for (const chunk of wrappedChunks) appendChunk(chunk, labelFor(chunk, isRetrievalTool ? '' : toolName))
+          continue
+        }
+
+        // 内置检索工具返回 SearchOutputSchema：{ kb_id, results: [{ content, metadata }] }
+        if (isRetrievalTool && Array.isArray(parsed?.results)) {
+          for (const chunk of parsed.results) appendChunk(chunk, labelFor(chunk, ''))
         }
       }
     }

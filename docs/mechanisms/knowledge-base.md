@@ -93,6 +93,16 @@ get_mindmap、search_file、download_kb_file
 
 推荐顺序是：列出可见知识库 → 检索候选片段 → 用 `file_id` 打开或定位原文。`download_kb_file` 会把有权访问的原始二进制写入当前 Project 的 `outputs`，供后续工具处理。知识库不会映射为 `/home/gem/kbs` 沙盒目录。
 
+## 回答引用
+
+基于检索内容的论断要在句末标注来源与页码：
+
+```html
+<cite source="文件名.pdf" data-page="12" type="file">1</cite>
+```
+
+`source` 取自片段的 `metadata.source`，`data-page` 取自 `metadata.source_metadata.pages`，序号在一条回答内从 1 递增。前端把标记渲染成品牌色胶囊并显示页码；点击后展开证据卡片，给出该片段原文、章节与页码，可跳到原文对应页核对。片段没有页码时（历史片段或外部只读知识库）只显示文件名。引用只做可解析性校验：文件名或页码在本次检索结果里对不上时，卡片明确提示引用可能不准确，不会把任意片段当成证据展示。语义支撑度仍需人工核对。
+
 ## 权限
 
 知识库的最终授权由后端依赖、Manager 可见性查询和具体工具目标校验共同完成：

@@ -177,6 +177,7 @@ async def test_query_kb_returns_search_schema_without_sandbox_paths(monkeypatch)
                         "file_id": "file-1",
                         "source": "auth-guide.pdf",
                         "filepath": "/tmp/sandbox/auth-guide.pdf",
+                        "source_metadata": {"pages": [12], "section": ["3 治疗"], "revision": 2},
                     },
                 }
             ],
@@ -194,6 +195,8 @@ async def test_query_kb_returns_search_schema_without_sandbox_paths(monkeypatch)
     assert result["results"][0]["file_id"] == "file-1"
     assert result["results"][0]["content"] == "auth guide"
     assert result["results"][0]["metadata"]["source"] == "auth-guide.pdf"
+    # 引用需要文件名与页码：来源元数据必须留在模型可见的工具结果里
+    assert result["results"][0]["metadata"]["source_metadata"]["pages"] == [12]
     assert "filepath" not in result["results"][0]["metadata"]
     assert "parsed_path" not in result["results"][0]["metadata"]
 

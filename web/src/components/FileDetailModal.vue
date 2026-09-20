@@ -84,6 +84,7 @@
         <AgentFilePreview
           :file="sourcePreviewFile"
           :file-path="file?.filename || ''"
+          :initial-page="initialPage"
           :status="sourcePreview.loading ? 'loading' : ''"
           loading-message="正在加载文件内容..."
           :show-header="false"
@@ -170,6 +171,11 @@ const props = defineProps({
   fileId: {
     type: [String, Number],
     default: ''
+  },
+  // 需要直接展示的原文页码（引用跳转）；0 表示不指定
+  initialPage: {
+    type: Number,
+    default: 0
   }
 })
 
@@ -379,6 +385,10 @@ const loadBasicInfo = async () => {
 
     file.value = nextFile
     viewMode.value = getDefaultDetailView(nextFile)
+    // 引用跳转需要直接看到原文对应页，而不是解析后的 Markdown
+    if (props.initialPage > 0 && availableViewModes.value.includes('source')) {
+      viewMode.value = 'source'
+    }
   } catch (error) {
     if (requestId !== basicRequestSeq) return
     console.error('加载文件基本信息失败:', error)

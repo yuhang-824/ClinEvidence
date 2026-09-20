@@ -53,7 +53,7 @@
             </div>
 
             <div
-              v-if="hasScore(chunk.score) || hasScore(chunk.rerank_score) || getLineRange(chunk)"
+              v-if="hasScore(chunk.score) || hasScore(chunk.rerank_score) || getPageRange(chunk) || getLineRange(chunk)"
               class="chunk-meta"
             >
               <span v-if="hasScore(chunk.score)" class="metric">
@@ -64,6 +64,7 @@
                 <span class="metric-label">重排</span>
                 <strong class="metric-value">{{ formatScore(chunk.rerank_score) }}</strong>
               </span>
+              <span v-if="getPageRange(chunk)" class="chunk-location">{{ getPageRange(chunk) }}</span>
               <span v-if="getLineRange(chunk)" class="chunk-location">{{
                 getLineRange(chunk)
               }}</span>
@@ -129,6 +130,12 @@ const hasScore = (value) => typeof value === 'number' && Number.isFinite(value)
 const formatScore = (value) => `${(value * 100).toFixed(1)}%`
 
 const formatChunkIndex = (index) => String(index + 1).padStart(2, '0')
+
+const getPageRange = (chunk) => {
+  const pages = chunk?.metadata?.source_metadata?.pages
+  if (!Array.isArray(pages) || pages.length === 0) return ''
+  return `PDF 第 ${pages.join('、')} 页`
+}
 
 const getLineRange = (chunk) => {
   const startLine = Number(chunk?.metadata?.start_line || 0)

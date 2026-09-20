@@ -638,6 +638,9 @@ class KnowledgeBase(ABC):
                 metadata.setdefault("chunk_index", chunk_index)
             if chunk.get("score") is not None:
                 metadata.setdefault("score", chunk.get("score"))
+            if chunk.get("rerank_score") is not None:
+                # 重排分要跟着结果走：调用方据此比较向量顺序与重排顺序，判断是否需要重排模型
+                metadata.setdefault("rerank_score", chunk.get("rerank_score"))
             if chunk.get("distance") is not None:
                 metadata.setdefault("distance", chunk.get("distance"))
 

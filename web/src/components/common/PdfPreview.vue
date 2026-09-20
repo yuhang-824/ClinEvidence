@@ -41,6 +41,11 @@ const props = defineProps({
   horizontalPadding: {
     type: Number,
     default: 32
+  },
+  // 加载完成后定位到的页码；0 表示不定位
+  initialPage: {
+    type: Number,
+    default: 0
   }
 })
 
@@ -226,7 +231,10 @@ const loadPdf = async () => {
     loading.value = false
 
     await nextTick()
-    if (seq === loadSeq) await renderAllPages()
+    if (seq === loadSeq) {
+      goToPage(props.initialPage)
+      await renderAllPages()
+    }
   } catch (err) {
     if (seq === loadSeq && err?.name !== 'RenderingCancelledException') {
       console.error('加载 PDF 失败:', err)
@@ -238,8 +246,19 @@ const loadPdf = async () => {
   }
 }
 
-const handleResize = () => {
-  if (!currentPdfDoc || loading.value || totalPages.value === 0) return
+/** 滚动到指定页；返回是否找到该页。 */
+const goToPage = (page) => {
+  const target = Number(page)
+  if (!Number.isFinite(target) || target < 1) return false
+  const card = containerRef.value?.querySelector(`[data-page-number="${target}"]`)
+  if (!card) return false
+  card.scrollIntoView({ block: 'start' })
+  return true
+}
+
+defineExpose({ goToPage })
+
+const handleResize = () => {  if (!currentPdfDoc || loading.value || totalPages.value === 0) return
 
   clearTimeout(resizeTimer)
   resizeTimer = setTimeout(() => {

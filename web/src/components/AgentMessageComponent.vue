@@ -51,6 +51,7 @@
         :content="parsedData.content"
         code-copy
         class="message-md"
+        @cite-click="openCitation"
       />
 
       <!-- 错误提示块 -->
@@ -86,6 +87,46 @@
       </div>
       <!-- 错误消息 -->
     </div>
+
+    <!-- 引用证据卡片：行内引用标记指向的检索片段与原文页码 -->
+    <a-modal
+      v-model:open="citationOpen"
+      :title="citationCard?.citation?.source || '引用来源'"
+      :footer="null"
+      :width="520"
+      wrap-class-name="citation-card-modal"
+    >
+      <div v-if="citationCard" class="citation-card">
+        <p class="citation-meta">
+          <span class="citation-file">{{ citationCard.citation.source }}</span>
+          <span v-if="citationCard.citation.page">PDF 第 {{ citationCard.citation.page }} 页</span>
+        </p>
+        <template v-if="citationCard.resolution">
+          <p v-if="citationCard.resolution.chunk.metadata?.source_metadata?.section?.length" class="citation-section">
+            {{ citationCard.resolution.chunk.metadata.source_metadata.section.join(' / ') }}
+          </p>
+          <p v-if="!citationCard.resolution.pageMatched" class="citation-warning">
+            {{ citationPageWarning }}
+          </p>
+          <p class="citation-snippet-label">{{ citationSnippetLabel }}</p>
+          <pre class="citation-snippet">{{ citationCard.resolution.chunk.content }}</pre>
+          <div v-if="citationFileTarget" class="citation-actions">
+            <a-button type="primary" size="small" @click="openCitationSource">
+              打开原文{{ citationCard.citation.page ? `（跳到第 ${citationCard.citation.page} 页）` : '' }}
+            </a-button>
+          </div>
+        </template>
+        <p v-else class="citation-warning">未找到对应片段，该引用可能不准确，请以原文为准。</p>
+      </div>
+    </a-modal>
+
+    <FileDetailModal
+      v-if="citationFileTarget"
+      v-model:open="citationSourceOpen"
+      :kb-id="citationFileTarget.kbId"
+      :file-id="citationFileTarget.fileId"
+      :initial-page="citationCard?.citation?.page || 0"
+    />
 
     <!-- 自定义内容 -->
     <slot></slot>
@@ -132,6 +173,8 @@ import RefsComponent from '@/components/RefsComponent.vue'
 import { Check, Copy, X } from '@lucide/vue'
 import ToolCallsGroupComponent from '@/components/ToolCallsGroupComponent.vue'
 import MarkdownPreview from '@/components/common/MarkdownPreview.vue'
+import FileDetailModal from '@/components/FileDetailModal.vue'
+import { resolveCitation } from '@/utils/citation'
 import MentionTextRenderer from '@/components/common/MentionTextRenderer.vue'
 import { useAgentStore } from '@/stores/agent'
 import { storeToRefs } from 'pinia'
@@ -300,6 +343,39 @@ const messageSources = computed(() => {
   }
   return { knowledgeChunks: [], webSources: [] }
 })
+
+// === 回答引用：点击行内引用标记后展示检索到的证据 ===
+const citationCard = ref(null)
+const citationOpen = ref(false)
+const citationSourceOpen = ref(false)
+
+const openCitation = (citation) => {
+  const resolution = resolveCitation(messageSources.value.knowledgeChunks, citation)
+  citationCard.value = { citation, resolution }
+  citationOpen.value = true
+}
+
+const openCitationSource = () => {
+  citationOpen.value = false
+  citationSourceOpen.value = true
+}
+
+// 只有同时拿到知识库与文件标识才谈得上打开原文
+const citationFileTarget = computed(() => {
+  const metadata = citationCard.value?.resolution?.chunk?.metadata
+  if (!metadata?.kb_id || !metadata?.file_id) return null
+  return { kbId: metadata.kb_id, fileId: metadata.file_id }
+})
+
+// 页码对不上时不能把片段说成"第 N 页的内容"：它只是该文件里相关度最高的片段
+const citationPageWarning = computed(() => {
+  const page = citationCard.value?.citation?.page
+  return `检索到的片段没有覆盖第 ${page} 页，下面展示的是该文件相关度最高的片段，请打开原文核对。`
+})
+
+const citationSnippetLabel = computed(() =>
+  citationCard.value?.resolution?.pageMatched ? '该页检索到的片段' : '该文件相关度最高的片段'
+)
 
 const validToolCalls = computed(() => enrichTaskToolCalls(props.message.tool_calls))
 
@@ -631,5 +707,59 @@ const parsedData = computed(() => {
   &:hover {
     background: rgba(255, 255, 255, 0.28);
   }
+}
+/* 引用证据卡片 */
+.citation-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.citation-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+.citation-file {
+  color: var(--color-text);
+  font-weight: 500;
+  word-break: break-all;
+}
+.citation-snippet-label {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+.citation-section {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+.citation-warning {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--color-warning-50);
+  color: var(--color-warning-700);
+  font-size: 13px;
+}
+.citation-snippet {
+  max-height: 40vh;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--gray-25);
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.citation-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 </style>
