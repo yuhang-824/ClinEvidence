@@ -6,7 +6,7 @@
       <a-button :disabled="pageNumber <= 1" @click="pageNumber--">上一页</a-button>
       <a-button :disabled="pageNumber >= pages.length" @click="pageNumber++">下一页</a-button>
       <a-button @click="downloadJson">下载原始结构 JSON</a-button>
-      <a-button v-if="editable" :disabled="!dirty" type="primary" @click="emit('save', payload)"
+      <a-button v-if="editable" :disabled="!dirty" type="primary" @click="requestSave"
         >保存结构修订</a-button
       >
     </div>
@@ -144,7 +144,51 @@ async function locateBlock(id) {
   await nextTick()
   document.querySelector(`[data-block-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'center' })
 }
-defineExpose({ locateBlock })
+// 与后端 structure.py 的保存/审核契约保持一致：排除必须留说明、未排除不得为空、
+// 审核需整页核验且含表格/图示/排除内容的页必须填写说明。前端先行校验，
+// 避免用户只能看到统一的"请求参数错误"。规则变更须与后端同步。
+function validate(scope = 'save') {
+  const problems = []
+  const perPageIndex = new Map()
+  for (const block of blocks.value) {
+    const index = (perPageIndex.get(block.page) || 0) + 1
+    perPageIndex.set(block.page, index)
+    const label = `第 ${block.page} 页文块 ${index}`
+    if (block.excluded && !block.note.trim()) {
+      problems.push(`${label} 已勾选「不参与检索」，请填写文块修订或排除说明`)
+    } else if (!block.excluded && !block.text.trim()) {
+      problems.push(`${label} 未排除且内容为空，请补充原文或勾选「不参与检索」`)
+    }
+  }
+  if (scope === 'approve') {
+    for (const page of pages.value) {
+      const checked = checks.every((check) => page.checks[check.key])
+      if (!checked) {
+        problems.push(`第 ${page.page} 页尚未完成阅读顺序、完整性和对应关系核验`)
+        continue
+      }
+      const special = blocks.value.some(
+        (block) =>
+          block.page === page.page &&
+          (block.kind === 'table' || block.kind === 'relationship' || block.excluded)
+      )
+      if ((special || (page.issues?.length ?? 0) > 0) && !page.note.trim()) {
+        problems.push(`第 ${page.page} 页需要填写表格、图示或异常核验说明`)
+      }
+    }
+  }
+  return problems
+}
+function requestSave() {
+  const problems = validate('save')
+  if (problems.length) {
+    error.value = problems.join('；')
+    return
+  }
+  error.value = ''
+  emit('save', payload.value)
+}
+defineExpose({ locateBlock, validate })
 const imageUrl = ref('')
 const loading = ref(false)
 const error = ref('')

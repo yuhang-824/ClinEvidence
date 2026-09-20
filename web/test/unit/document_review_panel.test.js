@@ -240,5 +240,169 @@ test('未保存修订不能审核或入库；保存后审核最新版本；失�
     app?.unmount()
     await server.close()
     delete globalThis.__reviewApi
+    delete globalThis.__reviewGuardProblems
+  }
+})
+
+test('审核通过前置校验拦截未核验结构并显示具体原因，通过后放行', async () => {
+  const calls = []
+  let problems = []
+  globalThis.__reviewGuardProblems = []
+  const record = {
+    file_status: 'parsed',
+    can_manage: true,
+    revisions: [
+      {
+        version: 1,
+        content: 'cleaned',
+        raw_content: 'raw',
+        report: {
+          changes: [],
+          warnings: [],
+          structure: { blocks: [], pages: [] }
+        },
+        approved_at: null
+      }
+    ]
+  }
+  globalThis.__reviewApi = {
+    getDocumentReview: async () => structuredClone(record),
+    changeDocumentReview: async (_kb, _file, payload) => {
+      calls.push(payload)
+      if (payload.action === 'approve') record.revisions[0].approved_at = '2026-09-20'
+      return structuredClone(record)
+    }
+  }
+  const server = await createServer({
+    optimizeDeps: { noDiscovery: true, include: [] },
+    server: { middlewareMode: true, hmr: false },
+    appType: 'custom',
+    plugins: [
+      {
+        name: 'review-guard-test',
+        resolveId(id) {
+          if (id === 'virtual:review-guard') return '\0' + id
+        },
+        load(id) {
+          if (id !== '\0virtual:review-guard') return
+          const source = readFileSync(
+            new URL('../../src/components/knowledge/DocumentReviewPanel.vue', import.meta.url),
+            'utf8'
+          )
+          return compileScript(parse(source).descriptor, {
+            id: 'review-guard',
+            inlineTemplate: true
+          })
+            .content.replace(
+              /import StructuredDocumentReview from '[^']+'/,
+              `const StructuredDocumentReview = {
+                render() { return null },
+                methods: { validate: (scope) => (scope === 'approve' ? [...globalThis.__reviewGuardProblems] : []) }
+              }`
+            )
+            .replace(
+              /import \{ message \} from 'ant-design-vue'/,
+              'const message = { success() {} }'
+            )
+            .replace(
+              /import \{ documentApi \} from '@\/apis\/knowledge_api'/,
+              'const documentApi = globalThis.__reviewApi'
+            )
+            .replace(
+              /import SourceChunkCard from '[^']+'/,
+              'const SourceChunkCard = { render() { return null } }'
+            )
+        }
+      }
+    ]
+  })
+  let app
+  try {
+    const { default: Panel } = await server.ssrLoadModule('virtual:review-guard')
+    const node = (type) => ({ type, children: [], props: {}, parent: null })
+    const renderer = createRenderer({
+      createElement: node,
+      createText: (text) => ({ ...node('text'), text }),
+      createComment: () => node('comment'),
+      insert(child, parent, anchor = null) {
+        if (child.parent) {
+          const old = child.parent.children.indexOf(child)
+          if (old >= 0) child.parent.children.splice(old, 1)
+        }
+        child.parent = parent
+        const index = anchor ? parent.children.indexOf(anchor) : -1
+        if (index >= 0) parent.children.splice(index, 0, child)
+        else parent.children.push(child)
+      },
+      remove(child) {
+        child.parent.children.splice(child.parent.children.indexOf(child), 1)
+      },
+      setText(child, text) {
+        child.text = text
+      },
+      setElementText(child, text) {
+        child.text = text
+        child.children = []
+      },
+      parentNode: (child) => child.parent,
+      nextSibling: (child) =>
+        child.parent?.children[child.parent.children.indexOf(child) + 1] || null,
+      patchProp(child, key, _old, value) {
+        child.props[key] = value
+      }
+    })
+    app = renderer.createApp(() => h(Panel, { kbId: 'kb', fileId: 'file' }))
+    for (const name of [
+      'a-spin',
+      'a-alert',
+      'a-select',
+      'a-button',
+      'a-radio-group',
+      'a-radio-button',
+      'a-textarea',
+      'a-input-number',
+      'a-pagination',
+      'a-popconfirm'
+    ]) {
+      app.component(name, {
+        setup:
+          (_props, { attrs, slots }) =>
+          () =>
+            h(name === 'a-button' ? 'button' : name, attrs, slots.default?.())
+      })
+    }
+    const root = node('root')
+    app.mount(root)
+    const find = (item, predicate) =>
+      predicate(item) ? item : item.children.map((c) => find(c, predicate)).find(Boolean)
+    const text = (item) => (item.text || '') + item.children.map(text).join('')
+    const button = (label) => find(root, (item) => item.type === 'button' && text(item) === label)
+    const flush = async () => {
+      await new Promise((resolve) => setImmediate(resolve))
+      await nextTick()
+    }
+    await flush()
+
+    // 存在未通过的审核校验时，审核通过被拦截且不发请求，页面显示具体原因
+    problems = ['第 1 页尚未完成阅读顺序、完整性和对应关系核验']
+    globalThis.__reviewGuardProblems = problems
+    assert.equal(button('审核通过').props.disabled, false)
+    await button('审核通过').props.onClick()
+    await flush()
+    assert.deepEqual(calls, [])
+    assert.ok(find(root, (item) => item.props.message === problems[0]))
+
+    // 校验通过后审核放行
+    problems = []
+    globalThis.__reviewGuardProblems = []
+    await button('审核通过').props.onClick()
+    await flush()
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].action, 'approve')
+    assert.equal(find(root, (item) => item.props.message === '第 1 页尚未完成阅读顺序、完整性和对应关系核验'), undefined)
+  } finally {
+    app?.unmount()
+    await server.close()
+    delete globalThis.__reviewApi
   }
 })

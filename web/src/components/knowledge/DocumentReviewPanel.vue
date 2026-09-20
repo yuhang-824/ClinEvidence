@@ -355,6 +355,14 @@ async function load() {
   }
 }
 async function act(action) {
+  // 服务端会按整页核验与说明要求拒绝审核；前端先行校验以给出具体到页的提示
+  if (action === 'approve' && current.value?.report?.structure) {
+    const problems = structureEditor.value?.validate?.('approve') || []
+    if (problems.length) {
+      actionError.value = problems.join('；')
+      return
+    }
+  }
   busy.value = true
   actionError.value = ''
   try {
