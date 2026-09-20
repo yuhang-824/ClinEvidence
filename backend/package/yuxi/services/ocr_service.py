@@ -44,31 +44,48 @@ def resolve_ocr_engine_id(engine_id: str | None, default_engine: str) -> str:
     return resolved
 
 
+async def resolve_ocr_engine_id_for_params(
+    params: dict[str, Any] | None = None,
+    db: AsyncSession | None = None,
+) -> str:
+    """只解析最终引擎标识，不构造引擎凭证。
+
+    供按引擎分发而不使用其处理参数的调用方（如知识库 PDF 结构解析）使用，
+    避免为无关引擎解析供应商密钥而扩大失败面。
+    """
+    configured_engine = (params or {}).get("ocr_engine")
+    default_engine = (
+        str(configured_engine)
+        if configured_engine is not None
+        else (await system_options.get(db))["default_ocr_engine"]
+    )
+    return resolve_ocr_engine_id(configured_engine, default_engine)
+
+
+async def build_ocr_processor_kwargs(
+    engine_id: str,
+    db: AsyncSession | None = None,
+) -> dict[str, Any]:
+    """构造指定引擎的处理参数，供分发与任务参数解析共用。"""
+    if engine_id == "disable":
+        return {}
+    if db is not None:
+        return await _build_processor_kwargs(db, engine_id)
+    from yuxi.storage.postgres.manager import pg_manager
+
+    async with pg_manager.get_async_session_context() as session:
+        return await _build_processor_kwargs(session, engine_id)
+
+
 async def resolve_ocr_task_params(
     params: dict[str, Any] | None = None,
     db: AsyncSession | None = None,
 ) -> dict[str, Any]:
     resolved = dict(params or {})
-    configured_engine = resolved.get("ocr_engine")
-    if configured_engine is None:
-        default_engine = (await system_options.get(db))["default_ocr_engine"]
-    else:
-        default_engine = str(configured_engine)
-    engine_id = resolve_ocr_engine_id(configured_engine, default_engine)
+    engine_id = await resolve_ocr_engine_id_for_params(resolved, db)
     resolved["ocr_engine"] = engine_id
     resolved.pop("ocr_engine_config", None)
-
-    if engine_id == "disable":
-        kwargs = {}
-    elif db is None:
-        from yuxi.storage.postgres.manager import pg_manager
-
-        async with pg_manager.get_async_session_context() as session:
-            kwargs = await _build_processor_kwargs(session, engine_id)
-    else:
-        kwargs = await _build_processor_kwargs(db, engine_id)
-
-    resolved["_ocr_processor_kwargs"] = kwargs
+    resolved["_ocr_processor_kwargs"] = await build_ocr_processor_kwargs(engine_id, db)
     return resolved
 
 
@@ -119,7 +136,11 @@ async def parse_document(
 
 
 async def parse_knowledge_document(source, params, *, kb_id, file_id):
-    """知识库 PDF 保存不可变结构原件，其他文档沿用清洗链路。"""
+    """知识库 PDF 保存不可变结构原件，其他文档沿用清洗链路。
+
+    PDF 解析引擎跟随 OCR 引擎选择：MinerU Official 走 MinerU 结构化解析，
+    其余引擎保持本地 Docling（真实病历等敏感资料选本地引擎即可留在内网）。
+    """
     import json
     import tempfile
     import uuid
@@ -133,15 +154,66 @@ async def parse_knowledge_document(source, params, *, kb_id, file_id):
         raw = await parse_document(source=source, params=params)
         content, report = clean_document(raw)
         return raw, content, report
-    from yuxi.knowledge.parser.docling_pdf import parse_structured_pdf
 
+    # 仅 PDF 需要在此提前确定引擎：非 PDF 由 parse_document 自行解析配置。
+    # 这里只取引擎标识，不构造该引擎的凭证，避免无关引擎的配置缺失挡住本地解析。
+    engine_id = await resolve_ocr_engine_id_for_params(params)
     client = get_minio_client()
     bucket, key = parse_minio_url(source)
     data = await client.adownload_file(bucket, key)
     with tempfile.TemporaryDirectory(prefix="knowledge-pdf-") as folder:
         path = Path(folder) / "source.pdf"
         await asyncio.to_thread(path.write_bytes, data)
-        document, raw, structure = await asyncio.to_thread(parse_structured_pdf, path)
+        if engine_id == "mineru_official":
+            import hashlib
+
+            from yuxi.knowledge.parser.docling_pdf import check_native_coverage
+            from yuxi.knowledge.parser.mineru_official import MinerUOfficialParser
+            from yuxi.knowledge.parser.mineru_structure import build_structure_from_mineru
+
+            parser_kwargs = await build_ocr_processor_kwargs(engine_id)
+            parser = MinerUOfficialParser(api_key=parser_kwargs.get("api_key"), api_base=parser_kwargs.get("api_base"))
+            parse_params = {
+                **(params or {}),
+                "image_bucket": client.KB_BUCKETS["images"],
+                "image_prefix": f"{kb_id}/kb-images",
+            }
+            artifact = await asyncio.to_thread(parser.parse_structured_pdf, str(path), parse_params)
+            raw = artifact["markdown"]
+            structure = build_structure_from_mineru(
+                artifact["layout"],
+                artifact["content_list"],
+                source_sha256=hashlib.sha256(data).hexdigest(),
+            )
+            if not structure["pages"]:
+                raise ValueError("MinerU 未返回页面结构，无法进行结构审核，请稍后重试或改用本地引擎")
+            structure["parser_version"] = artifact.get("model_version", "unknown")
+            if artifact.get("origin_pdf"):
+
+                def _coverage() -> None:
+                    import pymupdf
+
+                    with pymupdf.open(stream=artifact["origin_pdf"], filetype="pdf") as pdf:
+                        pages = [p.get_text() for p in pdf]
+                    if len(pages) != len(structure["pages"]):
+                        structure["pages"][0]["issues"].append(
+                            f"全文：原页文本层 {len(pages)} 页与解析 {len(structure['pages'])} 页不一致，"
+                            "独立文本层比对已跳过，请逐页核对"
+                        )
+                        return
+                    check_native_coverage(structure, pages)
+
+                await asyncio.to_thread(_coverage)
+            document = {
+                "parser": "mineru",
+                "model_version": artifact.get("model_version", "unknown"),
+                "content_list": artifact["content_list"],
+                "layout": artifact["layout"],
+            }
+        else:
+            from yuxi.knowledge.parser.docling_pdf import parse_structured_pdf
+
+            document, raw, structure = await asyncio.to_thread(parse_structured_pdf, path)
     if len(raw) > 2_000_000 or len(structure["blocks"]) > 20000:
         raise ValueError("文档超过结构审核上限，请先拆分 PDF")
     object_name = f"{kb_id}/structure/{file_id}/{uuid.uuid4().hex}.json"

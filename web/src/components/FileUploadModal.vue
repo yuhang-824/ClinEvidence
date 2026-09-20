@@ -58,7 +58,7 @@
             <p class="param-description">选择文件保存的目标文件夹</p>
           </div>
           <div class="col-item">
-            <div class="setting-label">图片 OCR 引擎（PDF 固定使用 Docling）</div>
+            <div class="setting-label">OCR 解析引擎（PDF 默认走 Docling；选 MinerU Official 时 PDF 走 MinerU）</div>
             <div class="setting-content">
               <OCRSelector
                 v-model="processingParams.ocr_engine"

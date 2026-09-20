@@ -118,7 +118,7 @@ system_options = Option(
             },
             {
                 "key": "default_ocr_engine",
-                "label": "默认 OCR 解析引擎",
+                "label": "默认 OCR 解析引擎（PDF 解析跟随此选择）",
                 "type": "ocr_engine",
                 "default": "rapid_ocr",
             },

@@ -4,6 +4,8 @@ MinerU Official 解析器
 使用 MinerU 官方云服务 API 进行文档解析
 """
 
+import asyncio
+import json
 import os
 import tempfile
 import time
@@ -14,7 +16,7 @@ import requests
 
 from yuxi.knowledge.parser.base import BaseDocumentProcessor, DocumentParserException
 from yuxi.knowledge.parser.capabilities import get_parser_capability
-from yuxi.knowledge.parser.zip_utils import process_zip_file_sync
+from yuxi.knowledge.parser.zip_utils import process_zip_file, process_zip_file_sync
 from yuxi.utils import hashstr, logger
 
 _CAPABILITY = get_parser_capability("mineru_official")
@@ -247,3 +249,54 @@ class MinerUOfficialParser(BaseDocumentProcessor):
             tmp_file.write(response.content)
             tmp_file.flush()
             return tmp_file.name
+
+    def parse_structured_pdf(self, file_path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """解析 PDF 并返回结构化工件：markdown、layout 与 content_list。
+
+        供知识库结构审核链路使用。不经过 process_file（其返回前会清理 ZIP），
+        而是自行完成上传、轮询、下载并从同一份 ZIP 提取 markdown 与结构文件，
+        图片沿用 ZIP 处理上传到 MinIO 并替换链接。
+        """
+        import zipfile
+
+        params = params or {}
+        batch_id = self._upload_file(file_path, params)
+        result = self._poll_batch_result(
+            batch_id,
+            max_wait_time=int(params.get("max_wait_seconds", 600)),
+            poll_interval=float(params.get("poll_interval_seconds", 5)),
+        )
+        zip_path = self._download_zip(result.get("full_zip_url"))
+        try:
+            with zipfile.ZipFile(zip_path) as zf:
+                markdown = asyncio.run(
+                    process_zip_file(
+                        zip_path,
+                        image_bucket=params.get("image_bucket", "kb-images"),
+                        image_prefix=params.get("image_prefix", "unknown/kb-images"),
+                    )
+                )
+                content_list, layout, origin_bytes = [], {}, None
+                for name in zf.namelist():
+                    if name.endswith("_content_list.json") and "v2" not in name:
+                        content_list = json.loads(zf.read(name))
+                    elif name == "layout.json":
+                        layout = json.loads(zf.read(name))
+                    elif name.endswith("_origin.pdf"):
+                        origin_bytes = zf.read(name)
+            if not layout:
+                raise DocumentParserException(
+                    "MinerU 结果缺少 layout.json，无法进行结构审核", self.get_service_name(), "layout_missing"
+                )
+            return {
+                "markdown": markdown,
+                "content_list": content_list,
+                "layout": layout,
+                "model_version": layout.get("_version_name", "unknown"),
+                "origin_pdf": origin_bytes,
+            }
+        finally:
+            try:
+                os.unlink(zip_path)
+            except OSError:
+                pass

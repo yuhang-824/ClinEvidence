@@ -7,6 +7,9 @@
         :model-value="configStore.config?.default_ocr_engine"
         @update:model-value="configStore.setConfigValue('default_ocr_engine', $event)"
       />
+      <p class="section-description">
+        知识库 PDF 解析也跟随此选择：选 MinerU Official 时 PDF 会经云端解析，真实病历请保持本地引擎（Docling、RapidOCR 等）。
+      </p>
     </div>
 
     <div class="section-title">OCR 服务配置</div>
