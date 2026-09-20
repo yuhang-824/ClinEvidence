@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import pymupdf
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from yuxi.config.options import ensure_options_in_db, update_option_value
 from yuxi.knowledge.parser.capabilities import PARSER_CAPABILITIES
+from yuxi.knowledge.structure import require_structure_review
 from yuxi.services import ocr_service
 from yuxi.storage.postgres.models_business import Base, ModelProvider
 
@@ -195,6 +197,72 @@ async def test_knowledge_pdf_uses_mineru_structure_when_engine_selected(monkeypa
     assert report["structure"]["original_json"] == "http://minio/kb-parsed/structure.json"
     assert minio.uploaded[0]["object_name"].startswith("kb_1/structure/file_1/")
     assert "1 总则" in content
+    # 未返回原页 PDF 时没有独立文本层比对，不能机器核验
+    assert "auto_review" not in report["structure"]["pages"][0]
+
+
+@pytest.mark.asyncio
+async def test_mineru_clean_page_is_machine_verified(monkeypatch):
+    """MinerU 页眉浮出为排除文块且文本层比对无缺失时，页面由机器核验。"""
+    minio = _FakeMinio()
+    with pymupdf.open() as pdf:
+        page = pdf.new_page()
+        page.insert_text((70, 84), "Section One", fontsize=12)
+        origin = pdf.tobytes()
+
+    class FakeMinerUParser:
+        def __init__(self, **kwargs):
+            pass
+
+        def parse_structured_pdf(self, path, params):
+            return {
+                "markdown": "# Section One",
+                "content_list": [],
+                "layout": {
+                    "pdf_info": [
+                        {
+                            "page_idx": 0,
+                            "page_size": [595, 842],
+                            "para_blocks": [
+                                {
+                                    "type": "title",
+                                    "bbox": [70, 84, 230, 103],
+                                    "level": 1,
+                                    "index": 0,
+                                    "lines": [{"spans": [{"content": "Section One"}]}],
+                                }
+                            ],
+                            "discarded_blocks": [
+                                {
+                                    "type": "header",
+                                    "bbox": [70, 20, 300, 40],
+                                    "lines": [{"spans": [{"content": "JOURNAL 2021"}]}],
+                                }
+                            ],
+                        }
+                    ]
+                },
+                "model_version": "mineru-test",
+                "origin_pdf": origin,
+            }
+
+    _patch_dispatch(monkeypatch, "mineru_official", minio, {"api_key": "test-key"})
+    monkeypatch.setattr("yuxi.knowledge.parser.mineru_official.MinerUOfficialParser", FakeMinerUParser)
+
+    _, content, report = await ocr_service.parse_knowledge_document(
+        "http://minio/knowledgebases/kb_1/upload/a.pdf",
+        {"ocr_engine": "mineru_official"},
+        kb_id="kb_1",
+        file_id="file_1",
+    )
+
+    structure = report["structure"]
+    assert structure["pages"][0]["auto_review"]["rule"] == "no-anomaly/v1"
+    assert structure["pages"][0]["native_text_check"]["absent_characters"] == 0
+    # 期刊名由排除文块承载：不进正文，也不触发人工核验
+    assert [b["excluded"] for b in structure["blocks"]] == [False, True]
+    assert "JOURNAL" not in content
+    assert require_structure_review(report) is not None
 
 
 @pytest.mark.asyncio
@@ -376,3 +444,18 @@ async def test_local_pdf_parsing_ignores_unrelated_engine_credentials(monkeypatc
 
     assert raw == "本地解析"
     assert report["structure"]["parser"] == "docling"
+
+
+def test_page_has_visual_content_separates_blank_page_from_image_page():
+    """空白页与含图页的可视内容证据必须区分，避免把扫描页当空白页放行。"""
+    from yuxi.knowledge.parser.docling_pdf import page_has_visual_content
+
+    with pymupdf.open() as pdf:
+        pdf.new_page()
+        pdf.new_page()
+        pixmap = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 40, 40))
+        pixmap.set_rect(pixmap.irect, (10, 10, 10))
+        pdf[1].insert_image(pymupdf.Rect(60, 60, 240, 240), pixmap=pixmap)
+
+        assert page_has_visual_content(pdf[0]) is False
+        assert page_has_visual_content(pdf[1]) is True

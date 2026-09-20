@@ -5,11 +5,21 @@ import copy
 import os
 import re
 import threading
-from collections import Counter
 from functools import lru_cache
 from pathlib import Path
 
-from yuxi.knowledge.structure import CHECKS
+from yuxi.knowledge.structure import (
+    ABSENT_CHARACTER_SAMPLE_LIMIT,
+    CHECKS,
+    EMPTY_BLOCK_EXCLUDED_NOTE,
+    PLACEHOLDER_EMPTY_BLOCK,
+    PLACEHOLDER_FIGURE_BLOCK,
+    comparable_text,
+    compared_characters,
+    coverage_shortfall,
+    mark_auto_review,
+    missing_text_pieces,
+)
 
 _parse_lock = threading.Lock()
 
@@ -133,16 +143,19 @@ def build_structure(document, tables):
             box = [bbox["l"], bbox["t"], bbox["r"], bbox["b"]]
         if label == "picture":
             texts = descendants(ref)
-            text = "\n\n".join(texts) or "[图示：请对照原页补充文字与对应关系，或说明排除原因]"
+            text = "\n\n".join(texts) or PLACEHOLDER_FIGURE_BLOCK
             kind = "relationship"
             page["issues"].append("图示需人工核对内部文字、条件与分支关系")
         else:
             seen.add(ref)
             text = tables.get(ref, item.get("text", ""))
             kind = "table" if label == "table" else "heading" if label in {"title", "section_header"} else "paragraph"
+        excluded = label in {"page_header", "page_footer"}
+        note = "解析器标记为页眉/页脚，请人工确认排除" if excluded else ""
         if not text.strip():
+            # 解析器没取到文字的区域没有可索引内容：直接排除，避免占位文本进正文
             page["issues"].append("存在空结构块，请对照原文检查")
-            text = "[空结构块：请对照原页补充内容或注明排除原因]"
+            text, excluded, note = PLACEHOLDER_EMPTY_BLOCK, True, EMPTY_BLOCK_EXCLUDED_NOTE
         level = min(6, int(item.get("level", 2))) if kind == "heading" else 2
         if kind == "heading":
             match = re.match(r"^(\d+(?:\.\d+)*)\s+\S", text)
@@ -150,7 +163,6 @@ def build_structure(document, tables):
                 level = min(6, match[1].count(".") + 1)
             if re.fullmatch(r"[\d.]+", text.strip()) or re.search(r"[。；，]$", text.strip()):
                 page["issues"].append("标题疑似正文续句或编号与标题分离，请修订文块类型和内容")
-        excluded = label in {"page_header", "page_footer"}
         blocks.append(
             {
                 "id": ref,
@@ -164,7 +176,7 @@ def build_structure(document, tables):
                 "source_text": text,
                 "text": text,
                 "excluded": excluded,
-                "note": "解析器标记为页眉/页脚，请人工确认排除" if excluded else "",
+                "note": note,
             }
         )
         if orphan:
@@ -188,29 +200,47 @@ def build_structure(document, tables):
     return {"schema": 1, "parser": "docling", "pages": sorted(pages, key=lambda p: p["page"]), "blocks": blocks}
 
 
-def check_native_coverage(structure, native_pages):
-    """用独立文本层发现疑似遗漏；字符覆盖不证明阅读顺序或语义正确。"""
-    for page, native in zip(structure["pages"], native_pages, strict=True):
-        expected = Counter(c.casefold() for c in native if c.isalnum())
-        parsed = Counter(
-            c.casefold()
-            for b in structure["blocks"]
-            if b["page"] == page["page"]
-            for c in b["source_text"]
-            if c.isalnum()
-        )
-        missing = expected - parsed
-        count = sum(expected.values())
-        page["native_text_check"] = {
-            "characters": count,
-            "missing_characters": sum(missing.values()),
-            "coverage": round(1 - sum(missing.values()) / count, 4) if count else None,
+def page_has_visual_content(page):
+    """判断原页是否存在图像或矢量图形，用于区分空白页与解析器漏读的扫描页。
+
+    嵌套在 Form XObject 里的图像不出现在 `get_images()` 中，用文本页的图片块补充判断；
+    宁可判为"有可视内容"要求人工核对，也不要把有内容的页当作空白页放行。
+    """
+    if page.get_images() or page.get_drawings():
+        return True
+    return any(block.get("type") == 1 for block in page.get_text("dict")["blocks"])
+
+
+def check_native_coverage(structure, native_pages, *, visual_pages=None):
+    """用独立文本层发现疑似遗漏；字符覆盖不证明阅读顺序或语义正确。
+
+    比对按"本页文本层里有没有解析结果完全找不到的连续片段"进行，查找范围是整份解析
+    结果：解析器会把跨页续排的段落整体归到起始页，只看本页文块会把续排内容误报成
+    缺失。解析器会归一化的码位（圈号、罗马数字、全角字母数字）两侧都做 NFKC 归一，
+    重复出现的页眉表头也不再被当成缺失。visual_pages 是与 native_pages 对齐的可视内容
+    证据；缺失时不写入，页据此不能判为空白。
+    """
+    haystack = "\x00".join(comparable_text(block["source_text"]) for block in structure["blocks"])
+    for index, (page, native) in enumerate(zip(structure["pages"], native_pages, strict=True)):
+        expected = compared_characters(native)
+        missing = missing_text_pieces(native, haystack)
+        absent = {character for piece in missing for character in compared_characters(piece)}
+        sample = "…".join(missing)[:ABSENT_CHARACTER_SAMPLE_LIMIT]
+        evidence = {
+            "characters": len(expected),
+            "absent_characters": len(absent),
+            "absent_sample": sample,
+            "coverage": round(1 - len(absent) / len(expected), 4) if expected else None,
         }
-        if not count:
+        if visual_pages is not None:
+            evidence["has_visual_content"] = bool(visual_pages[index])
+        page["native_text_check"] = evidence
+        if not expected:
             page["issues"].append("无可用 PDF 文本层，OCR 完整性须逐字对照原页")
-        elif missing:
+        elif coverage_shortfall(evidence):
             page["issues"].append(
-                f"独立文本层比对：疑似缺少 {sum(missing.values())}/{count} 个字符（可能含字体编码差异），请对照原页核实"
+                f"独立文本层比对：{len(absent)}/{len(expected)} 个字符未出现在解析结果中"
+                f"（如「{sample}」），请对照原页核实"
             )
 
 
@@ -252,8 +282,13 @@ def parse_structured_pdf(path):
         import pymupdf
 
         with pymupdf.open(path) as pdf:
-            check_native_coverage(structure, [p.get_text() for p in pdf])
+            check_native_coverage(
+                structure,
+                [p.get_text() for p in pdf],
+                visual_pages=[page_has_visual_content(p) for p in pdf],
+            )
         structure.update(
             parser_version=version("docling-slim"), source_sha256=hashlib.sha256(path.read_bytes()).hexdigest()
         )
+        mark_auto_review(structure)
         return data, raw, structure

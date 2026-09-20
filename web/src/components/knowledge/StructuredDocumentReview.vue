@@ -2,16 +2,17 @@
   <div class="structured-review">
     <div class="controls">
       <strong>逐页结构审核 · {{ pages.length }} 页</strong>
+      <span v-if="machineVerifiedCount" class="review-summary">
+        机器核验 {{ machineVerifiedCount }} 页 · 待人工 {{ pendingReviewCount }} 页
+      </span>
       <a-select v-model:value="pageNumber" aria-label="审核页码" :options="pageOptions" />
       <a-button :disabled="pageNumber <= 1" @click="pageNumber--">上一页</a-button>
       <a-button :disabled="pageNumber >= pages.length" @click="pageNumber++">下一页</a-button>
       <a-button @click="downloadJson">下载原始结构 JSON</a-button>
-      <a-button v-if="editable" :disabled="!dirty" type="primary" @click="requestSave"
-        >保存结构修订</a-button
-      >
     </div>
     <p>
       对照原页检查顺序、遗漏与对应关系。表格保留完整行和表头；图示请写清条件、分支、动作及去向。修改后重新核验本页。
+      解析器证据充分的页已由系统机器核验，只需处理被标记的页；勾选核验项或填写页面说明即可用人工核验覆盖机器结论。
     </p>
     <a-alert v-if="error" :message="error" type="error" show-icon />
     <div class="structure-columns">
@@ -24,6 +25,10 @@
         <a-button v-else @click="loadPage">重新加载原页</a-button>
       </section>
       <section class="block-list">
+        <p v-if="currentPage.auto_review" class="auto-review">
+          机器核验：{{ autoReviewLabel(currentPage.auto_review) }}，如需人工复核请勾选下方核验项
+        </p>
+        <p v-if="pageEvidence(currentPage)" class="evidence">{{ pageEvidence(currentPage) }}</p>
         <p v-for="(issue, i) in currentPage.issues || []" :key="i" class="issue">
           需核对：{{ issue }}
         </p>
@@ -100,7 +105,11 @@
             :readonly="!editable"
             :maxlength="4000"
             placeholder="核验说明：表格行列、图示路径、排除内容或异常页须记录核对依据与处理结果"
+            @change="noteChanged"
           />
+          <div v-if="editable" class="page-actions">
+            <a-button :disabled="!dirty" type="primary" @click="requestSave">保存结构修订</a-button>
+          </div>
         </div>
       </section>
     </div>
@@ -145,8 +154,8 @@ async function locateBlock(id) {
   document.querySelector(`[data-block-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'center' })
 }
 // 与后端 structure.py 的保存/审核契约保持一致：排除必须留说明、未排除不得为空、
-// 审核需整页核验且含表格/图示/排除内容的页必须填写说明。前端先行校验，
-// 避免用户只能看到统一的"请求参数错误"。规则变更须与后端同步。
+// 审核需整页核验（机器核验页除外）且含表格/图示/异常内容的页必须填写说明。前端
+// 先行校验，避免用户只能看到统一的"请求参数错误"。规则变更须与后端同步。
 function validate(scope = 'save') {
   const problems = []
   const perPageIndex = new Map()
@@ -156,13 +165,16 @@ function validate(scope = 'save') {
     const label = `第 ${block.page} 页文块 ${index}`
     if (block.excluded && !block.note.trim()) {
       problems.push(`${label} 已勾选「不参与检索」，请填写文块修订或排除说明`)
-    } else if (!block.excluded && !block.text.trim()) {
-      problems.push(`${label} 未排除且内容为空，请补充原文或勾选「不参与检索」`)
+    } else if (!block.excluded && (!block.text.trim() || isPlaceholderText(block.text))) {
+      // 占位正文不是内容：解析器写入的空块占位不能参与检索，补充原文后才可取消排除
+      problems.push(`${label} 未排除且没有正文，请补充原文或勾选「不参与检索」`)
     }
   }
   if (scope === 'approve') {
     for (const page of pages.value) {
-      const checked = checks.every((check) => page.checks[check.key])
+      // 机器核验页整页放行（含说明要求），与后端 require_structure_review 的跳过范围一致
+      if (page.auto_review) continue
+      const checked = isHumanVerified(page)
       if (!checked) {
         problems.push(`第 ${page.page} 页尚未完成阅读顺序、完整性和对应关系核验`)
         continue
@@ -188,7 +200,30 @@ function requestSave() {
   error.value = ''
   emit('save', payload.value)
 }
-defineExpose({ locateBlock, validate })
+defineExpose({ locateBlock, validate, getCurrentPage, goToNextUnreviewedPage })
+
+function getCurrentPage() {
+  return pageNumber.value
+}
+
+// 保存后从当前页起找第一张仍待人工核验的页（环形），让逐页审核不必手动翻回
+function goToNextUnreviewedPage(fromPage) {
+  const ordered = [...pages.value].sort((a, b) => a.page - b.page)
+  if (!ordered.length) return null
+  const start = Math.max(
+    0,
+    ordered.findIndex((p) => p.page === fromPage)
+  )
+  for (let step = 0; step < ordered.length; step++) {
+    const candidate = ordered[(start + step) % ordered.length]
+    if (!isVerified(candidate)) {
+      pageNumber.value = candidate.page
+      return candidate.page
+    }
+  }
+  pageNumber.value = ordered[start]?.page ?? pageNumber.value
+  return null
+}
 const imageUrl = ref('')
 const loading = ref(false)
 const error = ref('')
@@ -201,11 +236,11 @@ const initial = JSON.stringify(payload.value)
 const dirty = computed(() => JSON.stringify(payload.value) !== initial)
 watch(dirty, (value) => emit('dirty-change', value))
 const pageOptions = computed(() =>
-  pages.value.map((p) => ({
-    value: p.page,
-    label: `第 ${p.page} 页${Object.values(p.checks).every(Boolean) ? ' · 已核验' : ''}`
-  }))
+  pages.value.map((p) => ({ value: p.page, label: `第 ${p.page} 页${pageSuffix(p)}` }))
 )
+const machineVerifiedCount = computed(() => pages.value.filter(isMachineVerified).length)
+// 待人工 = 既没有机器核验，也没有人工完成三项核验
+const pendingReviewCount = computed(() => pages.value.filter((p) => !isVerified(p)).length)
 const currentPage = computed(() => pages.value.find((p) => p.page === pageNumber.value))
 const pageBlocks = computed(() => blocks.value.filter((b) => b.page === pageNumber.value))
 const checks = [
@@ -213,6 +248,45 @@ const checks = [
   { key: 'text_complete', label: '已核对全文与图中信息，无未处理遗漏' },
   { key: 'relationships', label: '已核对行列、字段、条件与分支对应关系' }
 ]
+const AUTO_REVIEW_LABELS = {
+  'blank-page/v1': '无文本层、无图像与图形、无正文文块，判定为空白页',
+  'no-anomaly/v1': '解析完整、无异常、无表格图示'
+}
+// 机器核验与人工核验是两种来源，人工作出的结论优先展示
+// 解析器取不到文字时写入的占位正文，与后端 structure.py 的前缀保持一致
+const PLACEHOLDER_PREFIXES = ['[空结构块', '[表格', '[图示']
+function isPlaceholderText(text) {
+  const value = String(text || "").trimStart()
+  return !!value && PLACEHOLDER_PREFIXES.some((prefix) => value.startsWith(prefix))
+}
+function isHumanVerified(page) {
+  return checks.every((check) => page?.checks?.[check.key] === true)
+}
+function isMachineVerified(page) {
+  return !isHumanVerified(page) && !!page?.auto_review
+}
+function isVerified(page) {
+  return isHumanVerified(page) || isMachineVerified(page)
+}
+function pageSuffix(page) {
+  if (isHumanVerified(page)) return ' · 已核验'
+  if (isMachineVerified(page)) return ' · 机器核验'
+  return ''
+}
+function autoReviewLabel(record) {
+  return AUTO_REVIEW_LABELS[record?.rule] || record?.rule || '解析器证据充分'
+}
+// 比对数字始终展示，机器核验的放行依据不隐藏
+function pageEvidence(page) {
+  const check = page?.native_text_check
+  if (!check) return ''
+  if (check.characters === 0) return '文本层比对：该页无可用文本层，无法做独立比对'
+  // 只按去重字符集口径展示数字；旧记录按字符出现次数统计，不套用同一标签
+  if (check.absent_characters === undefined) return ''
+  const sample = check.absent_sample ? `，如 ${check.absent_sample}` : ''
+  const coverage = ((check.coverage ?? 1) * 100).toFixed(2)
+  return `文本层比对：覆盖 ${coverage}%（缺 ${check.absent_characters}/${check.characters} 个字符${sample}）`
+}
 const kindOptions = [
   { value: 'heading', label: '标题' },
   { value: 'paragraph', label: '正文' },
@@ -236,6 +310,12 @@ function setBlock(block, field, value) {
 }
 function changed() {
   for (const key of Object.keys(currentPage.value.checks)) currentPage.value.checks[key] = false
+  // 与后端 revise_structure 一致：正文被修改后机器核验不再覆盖当前内容
+  delete currentPage.value.auto_review
+}
+// 页面说明是人工对该页的判断，写说明即接管核验，不再保留机器结论
+function noteChanged() {
+  delete currentPage.value.auto_review
 }
 function move(block, direction) {
   const index = blocks.value.indexOf(block)
@@ -353,8 +433,24 @@ pre {
   gap: 10px;
   padding: 16px 0;
 }
+/* 保存动作跟在核验项之后：审核动线在本页核验处结束，不必回到顶部 */
+.page-actions {
+  display: flex;
+  justify-content: flex-end;
+}
 .issue {
   color: var(--color-text-secondary);
+}
+.review-summary,
+.auto-review,
+.evidence {
+  color: var(--color-text-secondary);
+}
+.review-summary {
+  font-weight: normal;
+}
+.auto-review {
+  color: var(--color-primary);
 }
 @media (max-width: 900px) {
   .structure-columns {

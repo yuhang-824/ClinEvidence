@@ -167,9 +167,10 @@ async def parse_knowledge_document(source, params, *, kb_id, file_id):
         if engine_id == "mineru_official":
             import hashlib
 
-            from yuxi.knowledge.parser.docling_pdf import check_native_coverage
+            from yuxi.knowledge.parser.docling_pdf import check_native_coverage, page_has_visual_content
             from yuxi.knowledge.parser.mineru_official import MinerUOfficialParser
             from yuxi.knowledge.parser.mineru_structure import build_structure_from_mineru
+            from yuxi.knowledge.structure import mark_auto_review
 
             parser_kwargs = await build_ocr_processor_kwargs(engine_id)
             parser = MinerUOfficialParser(api_key=parser_kwargs.get("api_key"), api_base=parser_kwargs.get("api_base"))
@@ -195,15 +196,17 @@ async def parse_knowledge_document(source, params, *, kb_id, file_id):
 
                     with pymupdf.open(stream=artifact["origin_pdf"], filetype="pdf") as pdf:
                         pages = [p.get_text() for p in pdf]
+                        visuals = [page_has_visual_content(p) for p in pdf]
                     if len(pages) != len(structure["pages"]):
                         structure["pages"][0]["issues"].append(
                             f"全文：原页文本层 {len(pages)} 页与解析 {len(structure['pages'])} 页不一致，"
                             "独立文本层比对已跳过，请逐页核对"
                         )
                         return
-                    check_native_coverage(structure, pages)
+                    check_native_coverage(structure, pages, visual_pages=visuals)
 
                 await asyncio.to_thread(_coverage)
+            mark_auto_review(structure)
             document = {
                 "parser": "mineru",
                 "model_version": artifact.get("model_version", "unknown"),

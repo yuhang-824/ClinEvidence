@@ -8,7 +8,13 @@ content_list 仅用于补充表格 HTML，两份列表按页内顺序对齐，�
 
 import re
 
-from yuxi.knowledge.structure import CHECKS
+from yuxi.knowledge.structure import (
+    CHECKS,
+    EMPTY_BLOCK_EXCLUDED_NOTE,
+    PLACEHOLDER_EMPTY_BLOCK,
+    PLACEHOLDER_FIGURE_BLOCK,
+    PLACEHOLDER_TABLE_BLOCK,
+)
 
 _TITLE_NUMBER = re.compile(r"^(\d+(?:\.\d+)*)\s*\S")
 
@@ -125,19 +131,21 @@ def build_structure_from_mineru(
                 if not table_text:
                     table_text = _nested_text(block)
                 if not table_text:
-                    table_text = "[表格：请对照原页核对行列与数值，或在文块修订中粘贴表格内容]"
+                    table_text = PLACEHOLDER_TABLE_BLOCK
                     issues.append("表格内容未能自动提取，请对照原页核对")
                 text = table_text
             elif kind == "relationship":
                 caption = _nested_text(block)
-                text = caption or "[图示：请对照原页补充文字与对应关系，或说明排除原因]"
+                text = caption or PLACEHOLDER_FIGURE_BLOCK
             elif kind == "heading":
                 if re.fullmatch(r"[\d.]+", text.strip()) or re.search(r"[。；，]$", text.strip()):
                     issues.append("标题疑似正文续句或编号与标题分离，请修订文块类型和内容")
 
+            excluded, note = False, ""
             if not text.strip():
+                # 解析器没取到文字的区域没有可索引内容：直接排除，避免占位文本进正文
                 issues.append("存在空结构块，请对照原文检查")
-                text = "[空结构块：请对照原页补充内容或注明排除原因]"
+                text, excluded, note = PLACEHOLDER_EMPTY_BLOCK, True, EMPTY_BLOCK_EXCLUDED_NOTE
 
             blocks.append(
                 {
@@ -149,8 +157,8 @@ def build_structure_from_mineru(
                     "level": level,
                     "source_text": text,
                     "text": text,
-                    "excluded": False,
-                    "note": "",
+                    "excluded": excluded,
+                    "note": note,
                 }
             )
             current_page["issues"].extend(issues)

@@ -20,6 +20,7 @@
 ### 功能与修复
 
 - 新增用户定时智能体任务（Beta），支持 cron、时区、独立 Project 和立即运行；重叠执行跳过，错过的触发合并处理。边界见[定时任务决策](./decisions/implemented/2026-08-26-user-agent-scheduled-tasks.md)。
+- 知识库 PDF 逐页结构审核改为异常驱动：解析器证据充分的页由系统机器核验，人工只需处理含表格、图示或内容缺失的页，不必再逐页勾选核验项并填写说明（本机实测 105 页文档按当前口径：机器核验 67 页、需人工 38 页）。机器结论与人工签核分开记录，入库闸门与逐页来源映射不变；人工改动正文或填写页面说明即接管该页。详见[异常驱动审核决策](./decisions/implemented/2026-09-20-exception-driven-structure-review.md)。
 - 支持空闲线程主动压缩上下文；达到预算 85% 时提示操作。自动压缩统一使用一个阈值，大工具结果保留完整文件及模型可读摘要，检索预览保留来源信息。
 - 完善 Model/Tool 增量审计和按 Run 分组的调试时间线，收紧审计与普通聊天记录的隔离；审计接口返回最新 500 条并明确标记截断，详见[审计接口决策](./decisions/implemented/2026-09-03-unify-message-audit-read-api.md)。
 - 修复硅基流动、OpenCode 与 GLM Coding Plan 推理内容在流式输出和历史回读中的丢失；旧记录仅恢复已保存内容。OpenCode/Go 请求补齐稳定会话头，修复 `MissingSessionID`；同时修复首块工具调用不显示及处理过程布局。配置差异见[推理适配决策](./decisions/implemented/2026-09-07-provider-reasoning-adapter.md)。

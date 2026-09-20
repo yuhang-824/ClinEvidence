@@ -6,7 +6,17 @@ import pytest
 
 from yuxi.knowledge.chunking.mixed import chunk_mixed
 from yuxi.knowledge.parser.docling_pdf import build_structure, check_native_coverage, split_text_sources
-from yuxi.knowledge.structure import CHECKS, require_structure_review, revise_structure, structure_report
+from yuxi.knowledge.structure import (
+    AUTO_REVIEW_MIN_COVERAGE,
+    CHECKS,
+    EMPTY_BLOCK_EXCLUDED_NOTE,
+    PLACEHOLDER_EMPTY_BLOCK,
+    coverage_shortfall,
+    mark_auto_review,
+    require_structure_review,
+    revise_structure,
+    structure_report,
+)
 
 
 def sample():
@@ -39,6 +49,30 @@ def payload(structure):
     return {
         "blocks": [{k: b[k] for k in ("id", "page", "kind", "text")} for b in structure["blocks"]],
         "pages": [{"page": 1, "checks": dict.fromkeys(CHECKS, True), "note": "已核对 A 到 B、阴性到 C 的箭头"}],
+    }
+
+
+def page(number, **extra):
+    """构造一页未核验的页面记录，可附加文本层比对证据。"""
+    return {
+        "page": number,
+        "width": 600,
+        "height": 800,
+        "checks": dict.fromkeys(CHECKS, False),
+        "note": "",
+        "issues": [],
+        **extra,
+    }
+
+
+def coverage_evidence(characters=100, absent_characters=0, visual=False):
+    """构造独立文本层比对证据，coverage 由未覆盖比例派生。"""
+    return {
+        "characters": characters,
+        "absent_characters": absent_characters,
+        "absent_sample": "",
+        "coverage": round(1 - absent_characters / characters, 4) if characters else None,
+        "has_visual_content": visual,
     }
 
 
@@ -117,14 +151,293 @@ def test_picture_children_and_orphan_text_are_retained():
     assert any("主阅读树" in issue for issue in structure["pages"][0]["issues"])
 
 
-def test_native_coverage_flags_missing_text_and_scanned_page():
-    """独立文本层恢复遗漏告警，扫描页不伪报百分百覆盖。"""
+def test_native_coverage_records_absent_characters_and_scanned_page():
+    """独立文本层把解析结果完全找不到的连续片段记为缺失，扫描页不伪报百分百覆盖。"""
     structure = sample()
-    check_native_coverage(structure, ["治疗 immutable 缺失"])
-    assert structure["pages"][0]["native_text_check"]["missing_characters"] == 2
-    assert any("缺少" in issue for issue in structure["pages"][0]["issues"])
+    # sample 的流程块 source_text 是 immutable，因此 治疗 与 immutable 都已被解析覆盖
+    check_native_coverage(structure, ["治疗 immutable 缺失白细胞肾"])
+    evidence = structure["pages"][0]["native_text_check"]
+    assert (evidence["characters"], evidence["absent_characters"]) == (16, 6)
+    assert evidence["absent_sample"] == "缺失白细胞肾"
+    assert any("未出现在解析结果" in issue for issue in structure["pages"][0]["issues"])
     check_native_coverage(structure, [""])
     assert structure["pages"][0]["native_text_check"]["coverage"] is None
+
+
+def test_native_coverage_checks_whole_document_and_normalizes_forms():
+    """跨页续排的段落不算缺失；标记归一不误报，真正被丢弃的分期数字仍被发现。"""
+
+    def evidence(native, parsed_blocks):
+        structure = {
+            "schema": 1,
+            "parser": "test",
+            "pages": [page(1), page(2)],
+            "blocks": [
+                {"id": f"b{i}", "page": p, "kind": "paragraph", "text": text, "source_text": text}
+                for i, (p, text) in enumerate(parsed_blocks)
+            ],
+        }
+        check_native_coverage(structure, [native, ""])
+        return structure["pages"][0]["native_text_check"]
+
+    # 段落从上一页续排：本页文本层的内容出现在上一页文块里，不算缺失
+    sentence = "体外照射由CTV外放一定距离形成PTV，目前没有统一标准。"
+    continued = evidence(sentence, [(1, "子宫颈癌" + sentence)])
+    assert continued["absent_characters"] == 0
+    # 原页 Ⅳ 与 ⑴ 在解析结果中写作 IV 与 (1)：同一内容，不报缺失
+    normalized = evidence("治疗条件检查阴性随访Ⅳ期⑴", [(1, "治疗条件检查阴性随访IV期(1)")])
+    assert (normalized["characters"], normalized["absent_characters"]) == (14, 0)
+    # 解析结果真的丢了整句，必须被发现并给出原文片段
+    lost = evidence("治疗条件检查阴性随访Ⅳ期", [(1, "治疗条件检查阴性随访期")])
+    assert lost["absent_sample"] == "治疗条件检查阴性随访Ⅳ期"
+    assert lost["absent_characters"] == 13
+    # 表格 HTML 标签不参与比对：单元格文字按序拼起来仍然算已覆盖
+    html = "<table><tr><td>药物</td><td>剂量</td></tr><tr><td>A</td><td>5mg</td></tr></table>"
+    table = evidence("药物 剂量 A 5mg", [(1, html)])
+    assert table["absent_characters"] == 0
+
+
+def test_native_coverage_tolerance_is_ratio_based():
+    """阈值按未覆盖比例判定：等于阈值放行，低于阈值保留人工核对项。"""
+    parts = [chr(0x4E00 + i) + chr(0x5000 + i) for i in range(100)]
+    parsed = "".join(parts)
+
+    def check(extra):
+        structure = {
+            "schema": 1,
+            "parser": "test",
+            "pages": [page(1)],
+            "blocks": [{"id": "b", "page": 1, "kind": "paragraph", "text": parsed, "source_text": parsed}],
+        }
+        check_native_coverage(structure, ["。".join([*parts, extra])])
+        return structure["pages"][0]
+
+    boundary = check("缺甲")
+    assert boundary["native_text_check"]["absent_characters"] == 2
+    assert boundary["native_text_check"]["coverage"] >= AUTO_REVIEW_MIN_COVERAGE
+    assert not any("未出现在解析结果" in issue for issue in boundary["issues"])
+
+    shortfall = check("缺甲乙丙")
+    assert shortfall["native_text_check"]["absent_characters"] == 4
+    assert shortfall["native_text_check"]["coverage"] < AUTO_REVIEW_MIN_COVERAGE
+    assert any("未出现在解析结果" in issue for issue in shortfall["issues"])
+
+
+def test_placeholder_block_cannot_be_indexed_without_text():
+    """占位文块不能取消排除：没有正文就没有可索引内容，补充原文后才可以。"""
+    structure = {
+        "schema": 1,
+        "parser": "docling",
+        "pages": [page(1)],
+        "blocks": [
+            {
+                "id": "ph",
+                "page": 1,
+                "kind": "paragraph",
+                "text": PLACEHOLDER_EMPTY_BLOCK,
+                "source_text": PLACEHOLDER_EMPTY_BLOCK,
+                "excluded": True,
+                "note": EMPTY_BLOCK_EXCLUDED_NOTE,
+            }
+        ],
+    }
+
+    def revise(text):
+        return revise_structure(
+            structure,
+            {
+                "blocks": [{"id": "ph", "page": 1, "kind": "paragraph", "text": text, "excluded": False, "note": ""}],
+                "pages": [{"page": 1, "checks": dict.fromkeys(CHECKS, True), "note": "已核对"}],
+            },
+            "reviewer",
+            "2026-09-20",
+        )
+
+    with pytest.raises(ValueError, match="占位文块"):
+        revise(PLACEHOLDER_EMPTY_BLOCK)
+    # 补充原文后参与检索，占位句不再出现
+    content, _ = structure_report(revise("补录的原文"))
+    assert content == "补录的原文"
+
+
+def test_machine_review_clears_only_pages_without_anomalies():
+    """机器核验只放行无异常、无表格图示且有独立比对的页，其余页保持人工。"""
+    structure = {
+        "schema": 1,
+        "parser": "docling",
+        "pages": [
+            page(1, native_text_check=coverage_evidence()),
+            page(2, native_text_check=coverage_evidence(characters=0)),
+            page(3, native_text_check=coverage_evidence(absent_characters=40)),
+            page(4, native_text_check=coverage_evidence()),
+            page(5, native_text_check=coverage_evidence(characters=0)),
+            page(6, native_text_check=coverage_evidence(characters=0, visual=True)),
+            page(7, native_text_check=coverage_evidence(characters=0), issues=["文块有多处来源，请核对跨页关系"]),
+            page(8, native_text_check=coverage_evidence(characters=0)),
+            page(9, native_text_check=coverage_evidence(absent_characters=60)),
+        ],
+        "blocks": [
+            {"id": "hdr", "page": 1, "kind": "paragraph", "text": "期刊名", "excluded": True},
+            {"id": "body", "page": 1, "kind": "paragraph", "text": "正文"},
+            {
+                "id": "ph",
+                "page": 2,
+                "kind": "paragraph",
+                "text": PLACEHOLDER_EMPTY_BLOCK,
+                "excluded": True,
+                "note": EMPTY_BLOCK_EXCLUDED_NOTE,
+            },
+            {"id": "gap", "page": 3, "kind": "paragraph", "text": "正文"},
+            {"id": "tbl", "page": 4, "kind": "table", "text": "| a | b |"},
+            {"id": "scan", "page": 5, "kind": "paragraph", "text": "扫描页正文"},
+            {
+                "id": "scan2",
+                "page": 6,
+                "kind": "paragraph",
+                "text": PLACEHOLDER_EMPTY_BLOCK,
+                "excluded": True,
+                "note": EMPTY_BLOCK_EXCLUDED_NOTE,
+            },
+            {"id": "scan3", "page": 7, "kind": "paragraph", "text": "正文"},
+            {
+                "id": "scan4",
+                "page": 8,
+                "kind": "paragraph",
+                "text": PLACEHOLDER_EMPTY_BLOCK,
+                "excluded": True,
+                "note": EMPTY_BLOCK_EXCLUDED_NOTE,
+            },
+            {"id": "short", "page": 9, "kind": "paragraph", "text": "正文"},
+        ],
+    }
+    structure["pages"][0]["issues"].append("存在空结构块，请对照原文检查")
+    structure["pages"][2]["issues"].append("独立文本层比对：40/100 个字符未出现在解析结果中")
+    structure["pages"][4]["issues"].append("无可用 PDF 文本层，OCR 完整性须逐字对照原页")
+    structure["pages"][5]["issues"].append("无可用 PDF 文本层，OCR 完整性须逐字对照原页")
+    structure["pages"][5]["issues"].append("存在空结构块，请对照原文检查")
+    structure["pages"][6]["issues"].append("无可用 PDF 文本层，OCR 完整性须逐字对照原页")
+    structure["pages"][7]["issues"].append("无可用 PDF 文本层，OCR 完整性须逐字对照原页")
+    # 第 8 页缺 has_visual_content 证据：不能判空白
+    structure["pages"][7]["native_text_check"].pop("has_visual_content")
+    mark_auto_review(structure)
+    assert [p.get("auto_review", {}).get("rule") for p in structure["pages"]] == [
+        "no-anomaly/v1",
+        "blank-page/v1",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ]
+    # 空白页上由版面模型臆造的占位文块与提示被移除：页面只保留空白结论，不再像是内容被丢弃
+    assert [b["id"] for b in structure["blocks"] if b["page"] == 2] == []
+    assert structure["pages"][1]["issues"] == []
+    # 有可视内容的页保留文块与提示（第 6 页有图像，不能当空白页丢内容）
+    assert [b["id"] for b in structure["blocks"] if b["page"] == 6] == ["scan2"]
+    # 规则自身校验覆盖比例：低覆盖且不带 issue 的页证据同样不能放行
+    assert coverage_shortfall(structure["pages"][8]["native_text_check"])
+    # 机器核验页不需要人工签核，其余页仍然被拦截
+    with pytest.raises(ValueError, match="第 3 页尚未完成"):
+        require_structure_review(structure_report(structure)[1])
+    for number in (3, 4, 5, 6, 7, 8, 9):
+        structure["pages"][number - 1].update(
+            checks=dict.fromkeys(CHECKS, True), note="已对照原页核对", reviewed_by="reviewer"
+        )
+    assert require_structure_review(structure_report(structure)[1]) is not None
+
+
+def test_machine_review_invalidated_by_human_edit():
+    """人工修改正文、文块字段、页内顺序或页面说明后机器核验失效，未改动的页保留。"""
+    source = {
+        "schema": 1,
+        "parser": "docling",
+        "parser_version": "v1",
+        "pages": [
+            page(1, native_text_check=coverage_evidence()),
+            page(2, native_text_check=coverage_evidence()),
+        ],
+        "blocks": [
+            {"id": "a", "page": 1, "kind": "paragraph", "text": "甲"},
+            {"id": "b", "page": 2, "kind": "paragraph", "text": "乙"},
+            {"id": "c", "page": 2, "kind": "paragraph", "text": "丙"},
+        ],
+    }
+
+    def revise(block_changes, page_notes=("", "已核对阅读顺序")):
+        structure = copy.deepcopy(source)
+        mark_auto_review(structure)
+        assert all(p["auto_review"] for p in structure["pages"])
+        return revise_structure(
+            structure,
+            {
+                "blocks": block_changes,
+                "pages": [
+                    {"page": 1, "checks": dict.fromkeys(CHECKS, False), "note": page_notes[0]},
+                    {"page": 2, "checks": dict.fromkeys(CHECKS, True), "note": page_notes[1]},
+                ],
+            },
+            "reviewer",
+            "2026-09-20",
+        )
+
+    untouched = revise(
+        [
+            {"id": "a", "page": 1, "kind": "paragraph", "text": "甲"},
+            {"id": "b", "page": 2, "kind": "paragraph", "text": "乙"},
+            {"id": "c", "page": 2, "kind": "paragraph", "text": "丙"},
+        ]
+    )
+    assert untouched["pages"][0]["auto_review"]["rule"] == "no-anomaly/v1"
+    assert untouched["pages"][0]["reviewed_by"] is None
+
+    def blocks(overrides=None, extra=None):
+        items = [
+            {"id": "a", "page": 1, "kind": "paragraph", "text": "甲"},
+            {"id": "b", "page": 2, "kind": "paragraph", "text": "乙"},
+            {"id": "c", "page": 2, "kind": "paragraph", "text": "丙"},
+        ]
+        for index, values in (overrides or {}).items():
+            items[index].update(values)
+        return items + list(extra or [])
+
+    edited = revise(blocks({0: {"text": "甲（人工修订）"}}))
+    assert "auto_review" not in edited["pages"][0]
+    with pytest.raises(ValueError, match="第 1 页尚未完成"):
+        require_structure_review(structure_report(edited)[1])
+
+    reclassified = revise(blocks({0: {"kind": "heading", "level": 3}}))
+    assert "auto_review" not in reclassified["pages"][0]
+
+    excluded = revise(blocks({0: {"excluded": True, "note": "人工排除"}}))
+    assert "auto_review" not in excluded["pages"][0]
+
+    added = revise(blocks(extra=[{"id": "new:1", "page": 2, "kind": "paragraph", "text": "补录"}]))
+    assert added["pages"][1].get("auto_review") is None
+    assert added["pages"][0]["auto_review"]["rule"] == "no-anomaly/v1"
+
+    reordered = revise(
+        [
+            {"id": "a", "page": 1, "kind": "paragraph", "text": "甲"},
+            {"id": "c", "page": 2, "kind": "paragraph", "text": "丙"},
+            {"id": "b", "page": 2, "kind": "paragraph", "text": "乙"},
+        ]
+    )
+    assert "auto_review" not in reordered["pages"][1]
+
+    # 只写页面说明也是人工介入：机器结论不再覆盖该页，审阅者据此可以推翻机器判断
+    noted = revise(
+        [
+            {"id": "a", "page": 1, "kind": "paragraph", "text": "甲"},
+            {"id": "b", "page": 2, "kind": "paragraph", "text": "乙"},
+            {"id": "c", "page": 2, "kind": "paragraph", "text": "丙"},
+        ],
+        page_notes=("本页机器判断有误，需重新解析", "已核对阅读顺序"),
+    )
+    assert "auto_review" not in noted["pages"][0]
+    with pytest.raises(ValueError, match="第 1 页尚未完成"):
+        require_structure_review(structure_report(noted)[1])
 
 
 @pytest.mark.parametrize("line_count", [1, 2])

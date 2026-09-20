@@ -8,6 +8,7 @@ discarded_blocks（页眉/页脚）、content_list（表格 table_body HTML）�
 import pytest
 
 from yuxi.knowledge.parser.mineru_structure import build_structure_from_mineru
+from yuxi.knowledge.structure import structure_report
 
 LAYOUT = {
     "_version_name": "mineru2.5-2509-1.2.0",
@@ -188,3 +189,36 @@ def test_table_alignment_requires_matching_type_sequence():
     assert "乙表" not in tables[0]["text"]
     assert "请对照原页核对行列与数值" in tables[0]["text"]
     assert any("表格内容未能自动提取" in issue for issue in structure["pages"][0]["issues"])
+
+
+def test_empty_block_is_excluded_so_placeholder_never_reaches_content():
+    """解析器没取到文字的空块直接排除，占位正文不进入审核稿正文。"""
+    layout = {
+        "pdf_info": [
+            {
+                "page_idx": 0,
+                "page_size": [595, 842],
+                "para_blocks": [
+                    {"type": "text", "bbox": [70, 84, 230, 103], "index": 0, "lines": []},
+                    {
+                        "type": "text",
+                        "bbox": [70, 120, 230, 140],
+                        "index": 1,
+                        "lines": [{"spans": [{"content": "该页正文"}]}],
+                    },
+                ],
+                "discarded_blocks": [],
+            }
+        ]
+    }
+    structure = build_structure_from_mineru(layout, [])
+    empty, body = structure["blocks"]
+    assert empty["excluded"] is True
+    assert empty["note"] == "解析器未取到该区域文字，已排除；原页如有内容请补充后取消排除"
+    assert body["excluded"] is False
+    assert "存在空结构块，请对照原文检查" in structure["pages"][0]["issues"]
+
+    content, report = structure_report(structure)
+    assert "空结构块" not in content
+    assert "该页正文" in content
+    assert [b["id"] for b in report["structure"]["blocks"] if not b["excluded"]] == ["m0_1"]
