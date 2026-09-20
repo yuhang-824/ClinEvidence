@@ -40,14 +40,19 @@ async def test_structured_review_blocks_bypass_and_invalidates_approval(monkeypa
             await repo.write("kb", "file", version=1, operator="editor", approve=True)
         with pytest.raises(ReviewConflict, match="结构审核"):
             await repo.write("kb", "file", version=1, operator="editor", content="bypass")
+        # 草稿保存原地更新：版本保持 1，不产生新版本行
         await repo.write("kb", "file", version=1, operator="editor", structure=payload(source))
-        await repo.write("kb", "file", version=2, operator="editor", approve=True)
-        assert (await repo.approved_revision("kb", "file"))["version"] == 2
+        revisions = (await repo.read("kb", "file"))["revisions"]
+        assert [r["version"] for r in revisions] == [1]
+        await repo.write("kb", "file", version=1, operator="editor", approve=True)
+        assert (await repo.approved_revision("kb", "file"))["version"] == 1
+        # 已审核版本不可变：再次修订生成新草稿版本，旧审批失效
         changed = payload(source)
         changed["blocks"][1]["text"] = "修改对应关系"
         changed["pages"][0]["checks"]["relationships"] = False
-        await repo.write("kb", "file", version=2, operator="editor", structure=changed)
+        await repo.write("kb", "file", version=1, operator="editor", structure=changed)
         rows = (await repo.read("kb", "file"))["revisions"]
+        assert [r["version"] for r in rows] == [1, 2]
         assert rows[-1]["approved_at"] is None
         assert rows[0]["raw_content"] == "original"
         assert rows[-1]["report"]["structure"]["blocks"][1]["source_text"] == "immutable"
@@ -57,14 +62,14 @@ async def test_structured_review_blocks_bypass_and_invalidates_approval(monkeypa
             )
         # 即使审批字段被旧逻辑错误写入，索引入口仍执行结构核验。
         async with manager.get_async_session_context() as session:
-            row = await session.scalar(select(KnowledgeDocumentRevision).where(KnowledgeDocumentRevision.version == 3))
+            row = await session.scalar(select(KnowledgeDocumentRevision).where(KnowledgeDocumentRevision.version == 2))
             row.approved_at = datetime.now(UTC)
         with pytest.raises(ValueError, match="尚未完成"):
             await files.update_fields_if_status(
                 kb_id="kb",
                 file_id="file",
                 allowed_statuses={"parsed"},
-                data={"status": "indexing", "processing_params": {"review_version": 3}},
+                data={"status": "indexing", "processing_params": {"review_version": 2}},
             )
     finally:
         await _drop_isolated_schema(schema, admin, engine)
@@ -88,7 +93,7 @@ def cleanup_test_sandboxes():
 
 
 async def test_revisions_gate_concurrency_scope_and_migration(monkeypatch):
-    """并发修订仅一方成功，未审核不能索引，处理中不能修改。"""
+    """并发草稿保存由时间戳守卫拒绝陈旧方，未审核不能索引，处理中不能修改。"""
     schema, admin, engine, manager = await _create_isolated_manager("pytest_review")
     manager.AsyncSession = async_sessionmaker(engine, expire_on_commit=False)
     try:
@@ -136,36 +141,50 @@ async def test_revisions_gate_concurrency_scope_and_migration(monkeypatch):
         await repo.write(
             "kb", "file", version=0, operator="reviewer", initial=("original", "cleaned", {"warnings": []})
         )
+        snapshot = await repo.read("kb", "file")
+        saved_at = snapshot["revisions"][0]["created_at"]
+        # 两个并发草稿保存基于同一时间戳：持锁串行后后到者因草稿已变化被拒
         results = await asyncio.gather(
-            *[repo.write("kb", "file", version=1, operator=name, content=name) for name in ("one", "two")],
+            *[
+                repo.write(
+                    "kb",
+                    "file",
+                    version=1,
+                    operator=name,
+                    content=name,
+                    base_saved_at=saved_at,
+                )
+                for name in ("one", "two")
+            ],
             return_exceptions=True,
         )
         assert sum(isinstance(r, ReviewConflict) for r in results) == 1
         snapshot = await repo.read("kb", "file")
-        assert [r["version"] for r in snapshot["revisions"]] == [1, 2]
+        assert [r["version"] for r in snapshot["revisions"]] == [1]
         assert snapshot["revisions"][0]["raw_content"] == "original"
         with pytest.raises(LookupError):
-            await repo.write("other-kb", "file", version=2, operator="other", approve=True)
+            await repo.write("other-kb", "file", version=1, operator="other", approve=True)
         with pytest.raises(ReviewConflict, match="版本"):
-            await repo.write("kb", "file", version=1, operator="reviewer", approve=True)
-        await repo.write("kb", "file", version=2, operator="reviewer", approve=True)
+            await repo.write("kb", "file", version=9, operator="reviewer", approve=True)
+        await repo.write("kb", "file", version=1, operator="reviewer", approve=True)
         with pytest.raises(ReviewConflict, match="预览版本"):
             await files.update_fields_if_status(
                 kb_id="kb",
                 file_id="file",
                 allowed_statuses={"parsed"},
-                data={"status": "indexing", "processing_params": {"review_version": 1}},
+                data={"status": "indexing", "processing_params": {"review_version": 0}},
             )
         await files.update_fields_if_status(
             kb_id="kb", file_id="file", allowed_statuses={"parsed"}, data={"status": "indexing"}
         )
         with pytest.raises(ReviewConflict, match="正在处理"):
-            await repo.write("kb", "file", version=2, operator="reviewer", content="late edit")
+            await repo.write("kb", "file", version=1, operator="reviewer", content="late edit")
         assert await repo.approved_content("kb", "file") in {"one", "two"}
         await files.update_fields_if_status(
             kb_id="kb", file_id="file", allowed_statuses={"indexing"}, data={"status": "indexed"}
         )
-        await repo.write("kb", "file", version=2, operator="reviewer", content="new draft")
+        # 已审核且已入库的版本不可变：再次修改生成新草稿版本
+        await repo.write("kb", "file", version=1, operator="reviewer", content="new draft")
         with pytest.raises(ReviewConflict, match="审核"):
             await files.update_fields_if_status(
                 kb_id="kb", file_id="file", allowed_statuses={"indexed"}, data={"status": "indexing"}
@@ -174,11 +193,15 @@ async def test_revisions_gate_concurrency_scope_and_migration(monkeypatch):
             record = await session.scalar(select(KnowledgeFile).where(KnowledgeFile.file_id == "file"))
             assert record.status == "indexed" and record.markdown_file == "original"
         revisions = (await repo.read("kb", "file"))["revisions"]
-        assert revisions[1]["indexed_at"] and revisions[2]["approved_at"] is None
+        assert [r["version"] for r in revisions] == [1, 2]
+        assert revisions[0]["indexed_at"]
+        assert revisions[1]["approved_at"] is None
         assert await repo.published_content("kb", "file") in {"one", "two"}
-        await repo.write("kb", "file", version=3, operator="reviewer", approve=True)
+        await repo.write("kb", "file", version=2, operator="reviewer", approve=True)
         raced = await asyncio.gather(
-            repo.write("kb", "file", version=3, operator="editor", content="racing draft"),
+            repo.write(
+                "kb", "file", version=2, operator="editor", content="racing draft", base_saved_at=None
+            ),
             files.update_fields_if_status(
                 kb_id="kb", file_id="file", allowed_statuses={"indexed"}, data={"status": "indexing"}
             ),
@@ -264,11 +287,12 @@ async def test_boundary_revision_preserves_pages_resets_approval_and_automatic(m
         with pytest.raises(ValueError, match="切点"):
             await repo.write("kb", "file", version=2, operator="editor", repair=True, boundaries=[8])
         assert len((await repo.read("kb", "file"))["revisions"]) == 2
+        # 未审核的草稿版本原地更新：恢复自动切分与正文修改都不产生新版本
         await repo.write("kb", "file", version=2, operator="editor", repair=True, boundaries=None)
         latest = (await repo.read("kb", "file"))["revisions"][-1]
         assert "chunk_boundaries" not in latest["report"]
         assert latest["report"]["page_spans"] == report["page_spans"]
-        await repo.write("kb", "file", version=3, operator="editor", content="修改后正文。")
+        await repo.write("kb", "file", version=2, operator="editor", content="修改后正文。")
         assert "page_spans" not in (await repo.read("kb", "file"))["revisions"][-1]["report"]
     finally:
         await _drop_isolated_schema(schema, admin, engine)

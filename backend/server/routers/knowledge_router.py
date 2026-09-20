@@ -907,6 +907,7 @@ class DocumentReviewInput(BaseModel):
     content: str | None = Field(default=None, max_length=2_000_000)
     boundaries: list[StrictInt] | None = Field(default=None, max_length=10000)
     structure: dict | None = None
+    base_saved_at: str | None = Field(default=None, max_length=64)
 
 
 class ChunkPreviewInput(BaseModel):
@@ -1014,6 +1015,7 @@ async def change_document_review(
             content=payload.content,
             boundaries=payload.boundaries,
             structure=payload.structure,
+            base_saved_at=payload.base_saved_at,
             operator=current_user.uid,
         )
         result["can_manage"] = True

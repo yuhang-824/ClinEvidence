@@ -88,8 +88,15 @@ class DocumentReviewRepository:
         repair=False,
         boundaries=None,
         structure=None,
+        base_saved_at=None,
     ):
-        """拒绝陈旧版本和处理中编辑，审核只作用于已保存的最新版本。"""
+        """拒绝陈旧版本和处理中编辑，审核只作用于已保存的最新版本。
+
+        版本语义：一次审核循环一个版本。未审核且未入库的最新版本原地更新
+        （保存不产生新版本行）；已审核或已入库后再修改才生成新草稿版本。
+        base_saved_at 是调用方加载草稿时的时间戳，原地更新前与之比对，
+        不一致说明草稿已被其他人保存，拒绝以保护并发修订。
+        """
         async with pg_manager.get_async_session_context() as session:
             file = await session.scalar(
                 select(KnowledgeFile)
@@ -121,6 +128,8 @@ class DocumentReviewRepository:
                 if not latest.approved_at:
                     latest.approved_by, latest.approved_at = operator, utc_now()
             else:
+                if base_saved_at is not None and latest.created_at.isoformat() != base_saved_at:
+                    raise ReviewConflict("草稿已被其他修订保存，请重新加载后再操作")
                 report = {
                     "version": 1,
                     "changes": [],
@@ -145,15 +154,24 @@ class DocumentReviewRepository:
                     content, report = structure_report(revised, latest.report)
                 elif structure is not None:
                     raise ReviewConflict("此版本没有结构数据，请重新解析 PDF")
-                session.add(
-                    KnowledgeDocumentRevision(
-                        file_id=file_id,
-                        version=version + 1,
-                        content=content,
-                        report=report,
-                        created_by=operator,
+
+                if latest.approved_at or latest.indexed_at:
+                    # 已审核/已入库的版本不可变：再次修订生成新草稿版本
+                    session.add(
+                        KnowledgeDocumentRevision(
+                            file_id=file_id,
+                            version=version + 1,
+                            content=content,
+                            report=report,
+                            created_by=operator,
+                        )
                     )
-                )
+                else:
+                    # 审核中的草稿原地更新：保存不产生新版本，审核通过才冻结
+                    latest.content = content
+                    latest.report = report
+                    latest.created_by = operator
+                    latest.created_at = utc_now()
             file.updated_by, file.updated_at = operator, utc_now()
 
     async def approved_content(self, kb_id, file_id):
