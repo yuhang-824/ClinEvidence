@@ -1373,7 +1373,11 @@ const currentAgent = computed(() => {
 })
 
 // 诊疗 Agent 要求会话在创建时绑定患者;选择结果仅用于本次创建请求。
-const requiresPatient = computed(() => currentAgent.value?.config_json?.requires_patient === true)
+const requiresPatient = computed(
+  () =>
+    currentAgent.value?.config_json?.context?.requires_patient === true ||
+    currentAgent.value?.config_json?.requires_patient === true
+)
 const clinicalPatientId = ref('')
 const patientModalVisible = ref(false)
 let patientSelectionResolve = null
