@@ -101,6 +101,8 @@ async def resolve_configured_runtime_tools(context) -> list[Any]:
     selected_tool_names: set[str] = set()
     selected_tool_sources: dict[str, str] = {}
     buildin_tools = {tool.name: tool for tool in get_tool_instances_by_category("buildin")}
+    # 临床工具仅出现在显式配置它的 Agent 上;配置即授权,不进入默认全量工具。
+    buildin_tools.update({tool.name: tool for tool in get_tool_instances_by_category("clinical")})
 
     for tool_name in getattr(context, "tools", None) or []:
         if not isinstance(tool_name, str) or tool_name in selected_tool_names:

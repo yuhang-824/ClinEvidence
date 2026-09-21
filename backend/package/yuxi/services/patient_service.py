@@ -154,7 +154,11 @@ async def require_patient_for_thread_binding(
 
     诊疗 Agent(requires_patient)必须提供 patient_id;提供时按可见性锁定 active 患者。
     """
-    requires_patient = bool((getattr(agent, "config_json", None) or {}).get("requires_patient"))
+    config_json = getattr(agent, "config_json", None) or {}
+    context_config = config_json.get("context") or {}
+    requires_patient = bool(
+        context_config.get("requires_patient") or config_json.get("requires_patient")
+    )
     normalized_id = str(patient_id or "").strip() or None
     if requires_patient and normalized_id is None:
         raise HTTPException(status_code=400, detail="该智能体要求绑定患者")

@@ -458,7 +458,7 @@ async def resolve_agent_resource_options(
 
         options["tools"] = [
             _resource_option(tool["slug"], tool.get("name"), tool.get("description"))
-            for tool in get_tool_metadata(category="buildin")
+            for tool in get_tool_metadata(category="buildin") + get_tool_metadata(category="clinical")
             if tool.get("slug")
         ]
     if "knowledges" in fields_to_load:
