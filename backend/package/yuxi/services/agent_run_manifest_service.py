@@ -76,6 +76,7 @@ def build_manifest_payload(
     skill_entries: list[dict],
     code_revision: str | None,
     limits: dict,
+    patient_binding: dict | None = None,
 ) -> dict:
     """从已解析的执行资产组装 manifest；直接字段仅限稳定标识、摘要与关键 limit。
 
@@ -92,6 +93,7 @@ def build_manifest_payload(
             "spec": model_spec if isinstance(model_spec, str) and model_spec else None,
         },
         "tool_approval_mode": tool_approval_mode,
+        "patient_binding": patient_binding,
         "resources": {
             "tools": _resource_keys(normalized_context.get("tools")),
             "mcps": _resource_keys(normalized_context.get("mcps")),
@@ -100,6 +102,43 @@ def build_manifest_payload(
         "limits": limits,
         "config_digest": compute_config_digest(normalized_context),
         "code_revision": code_revision or "unresolved",
+    }
+
+
+async def resolve_patient_binding(db: AsyncSession, thread_id: str) -> dict | None:
+    """从会话解析患者绑定与本 Run 固化的快照;在 manifest 准备时执行一次。
+
+    绑定缺失返回 None(普通会话);绑定存在但快照未发布时记录 snapshot_id=None,
+    由患者工具在运行期显式拒绝,而不是在 manifest 层伪装已固化。
+    """
+    from sqlalchemy import select
+
+    from yuxi.storage.postgres.models_business import Conversation
+    from yuxi.storage.postgres.models_clinical import Patient, PatientSnapshot
+
+    conversation = await db.scalar(select(Conversation).where(Conversation.thread_id == str(thread_id)))
+    if conversation is None or not conversation.patient_id:
+        return None
+    patient = await db.get(Patient, conversation.patient_id)
+    if patient is None:
+        return None
+    snapshot = (
+        await db.scalar(
+            select(PatientSnapshot)
+            .where(
+                PatientSnapshot.patient_id == patient.id,
+                PatientSnapshot.status == "published",
+                PatientSnapshot.id == patient.current_snapshot_id,
+            )
+            .order_by(PatientSnapshot.sequence.desc())
+        )
+        if patient.current_snapshot_id
+        else None
+    )
+    return {
+        "patient_id": patient.id,
+        "patient_snapshot_id": snapshot.id if snapshot else None,
+        "patient_snapshot_sequence": snapshot.sequence if snapshot else None,
     }
 
 
@@ -177,6 +216,7 @@ async def prepare_run_execution(
 
     # 身份、租约与路径不属于可配置字段；完整 prompt 仅通过摘要进入 manifest。
     effective_config = {name: getattr(context, name) for name in configurable_fields}
+    patient_binding = await resolve_patient_binding(db, run.conversation_thread_id)
     manifest = build_manifest_payload(
         run_type=run.run_type,
         agent_slug=run.agent_slug,
@@ -187,5 +227,6 @@ async def prepare_run_execution(
         limits={name: getattr(context, name, None) for name in MANIFEST_LIMIT_FIELDS},
         skill_entries=build_skill_manifest_entries(effective_config, context._skill_runtime_snapshot),
         code_revision=resolve_code_revision(),
+        patient_binding=patient_binding,
     )
     return PreparedRunExecution(manifest=manifest, context=context, backend_id=agent_item.backend_id)

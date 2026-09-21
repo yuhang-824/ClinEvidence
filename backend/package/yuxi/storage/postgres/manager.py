@@ -23,7 +23,7 @@ from yuxi.utils import logger
 from yuxi.utils.singleton import SingletonMeta
 
 AGENT_RUN_TERMINAL_STATUS_SQL = ", ".join(f"'{status}'" for status in AGENT_RUN_TERMINAL_STATUSES)
-BUSINESS_SCHEMA_VERSION = 7
+BUSINESS_SCHEMA_VERSION = 8
 KNOWLEDGE_SCHEMA_VERSION = 4
 SCHEMA_VERSION_TABLE = "yuxi_schema_migrations"
 AGENT_RUN_LEASE_SCHEMA_STATEMENTS = (
@@ -36,6 +36,20 @@ AGENT_RUN_LANGFUSE_SCHEMA_STATEMENTS = (
     "ALTER TABLE IF EXISTS agent_runs ADD COLUMN IF NOT EXISTS langfuse_trace_id VARCHAR(64)",
 )
 AGENT_RUN_CURSOR_SCHEMA_STATEMENTS = ("ALTER TABLE IF EXISTS agent_runs DROP COLUMN IF EXISTS last_event_id",)
+# 患者绑定不可变:RESTRICT 阻止删除患者行时静默解绑会话;患者下线走软删与显式清理流程。
+CONVERSATION_PATIENT_FK_STATEMENT = """
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_conversations_patient_id_patients'
+          AND conrelid = 'conversations'::regclass
+    ) THEN
+        ALTER TABLE conversations ADD CONSTRAINT fk_conversations_patient_id_patients
+        FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE RESTRICT;
+    END IF;
+END $$
+"""
 MESSAGE_AUDIT_SCHEMA_STATEMENTS = (
     "ALTER TABLE IF EXISTS messages ADD COLUMN IF NOT EXISTS operation_id VARCHAR(128)",
     "ALTER TABLE IF EXISTS messages ADD COLUMN IF NOT EXISTS started_at TIMESTAMP WITHOUT TIME ZONE",
@@ -949,6 +963,8 @@ class PostgresManager(metaclass=SingletonMeta):
             "ALTER TABLE IF EXISTS skills ADD COLUMN IF NOT EXISTS content_hash VARCHAR(128)",
             "ALTER TABLE IF EXISTS conversations ADD COLUMN IF NOT EXISTS is_pinned BOOLEAN NOT NULL DEFAULT FALSE",
             "ALTER TABLE IF EXISTS conversations ADD COLUMN IF NOT EXISTS last_viewed_run_id VARCHAR(64)",
+            "ALTER TABLE IF EXISTS conversations ADD COLUMN IF NOT EXISTS patient_id VARCHAR(64)",
+            CONVERSATION_PATIENT_FK_STATEMENT,
             "ALTER TABLE IF EXISTS mcp_servers ADD COLUMN IF NOT EXISTS env JSONB",
             *AGENT_RUN_CURSOR_SCHEMA_STATEMENTS,
             """

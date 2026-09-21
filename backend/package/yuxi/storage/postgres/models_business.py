@@ -410,6 +410,13 @@ class Conversation(Base):
     is_pinned = Column(Boolean, default=False, nullable=False, index=True, comment="Is pinned to top")
     last_viewed_run_id = Column(String(64), nullable=True, comment="Latest top-level run id viewed by user")
     project_id = Column(String(64), nullable=False, index=True, comment="Conversation 绑定的 Project ID")
+    patient_id = Column(
+        String(64),
+        ForeignKey("patients.id", ondelete="RESTRICT", name="fk_conversations_patient_id_patients"),
+        nullable=True,
+        index=True,
+        comment="诊疗会话绑定的患者;创建后不可更新,普通会话为空",
+    )
     created_at = Column(DateTime, default=utc_now_naive, comment="Creation time")
     updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, comment="Update time")
     extra_metadata = Column(JSON, nullable=True, comment="Additional metadata")
@@ -1402,3 +1409,7 @@ Index(
     AgentRunRequest.created_at,
     AgentRunRequest.id,
 )
+
+
+# 患者域表与业务表共享 metadata;FK 惰性解析依赖本导入确保 create_all 前已注册。
+import yuxi.storage.postgres.models_clinical  # noqa: F401,E402

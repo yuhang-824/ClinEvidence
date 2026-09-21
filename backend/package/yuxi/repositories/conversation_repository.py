@@ -135,6 +135,7 @@ class ConversationRepository:
         thread_id: str | None = None,
         metadata: dict | None = None,
         project_id: str,
+        patient_id: str | None = None,
         creation_request_id: str | None = None,
     ) -> Conversation:
         """创建对话和统计记录但只 flush，供外层事务继续绑定关系。"""
@@ -156,6 +157,7 @@ class ConversationRepository:
             extra_metadata=metadata,
             last_viewed_run_id=UNVIEWED_RUN_MARKER,
             project_id=project_id,
+            patient_id=patient_id,
         )
 
         self.db.add(conversation)
@@ -177,6 +179,7 @@ class ConversationRepository:
         thread_id: str | None = None,
         metadata: dict | None = None,
         creation_request_id: str | None = None,
+        patient_id: str | None = None,
     ) -> Conversation:
         """创建并提交一个完整对话，适用于不需要外层事务编排的入口。"""
         conversation = await self.add_conversation(
@@ -186,6 +189,7 @@ class ConversationRepository:
             thread_id=thread_id,
             metadata=metadata,
             project_id=project_id,
+            patient_id=patient_id,
             creation_request_id=creation_request_id,
         )
         await self.db.commit()

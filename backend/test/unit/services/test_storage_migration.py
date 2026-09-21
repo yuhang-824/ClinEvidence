@@ -278,7 +278,10 @@ async def test_main_v2_business_schema_is_converged_and_versioned_as_current(mon
 
     assert "business_schema" in calls
     assert f"version:business:{storage_migration.BUSINESS_SCHEMA_VERSION}" in calls
-    assert {"create_business", "checkpoint", "knowledge_schema"}.isdisjoint(calls)
+    # v2 升级需要 create_business 幂等补建患者域新表(FK 收敛要求 patients 先存在);
+    # checkpoint 仅属于未版本化新库,knowledge_schema 属于知识域,均不在 business v2 升级路径。
+    assert "create_business" in calls
+    assert {"checkpoint", "knowledge_schema"}.isdisjoint(calls)
 
 
 @pytest.mark.asyncio

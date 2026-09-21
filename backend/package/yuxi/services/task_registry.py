@@ -68,6 +68,12 @@ _TASK_DEFINITIONS = {
             "run_virtual_folder_migration",
         ),
         TaskDefinition(
+            "patient_record_ingest",
+            "yuxi.services.patient_record_ingest_service",
+            "run_patient_record_ingest",
+            failure_function="fail_patient_record_ingest",
+        ),
+        TaskDefinition(
             "dataset_generation",
             "yuxi.knowledge.eval.service",
             "run_dataset_generation_task",

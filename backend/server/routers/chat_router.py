@@ -160,7 +160,7 @@ async def compress_thread_context(
 
 
 class ThreadCreate(BaseModel):
-    """新线程创建请求，只允许在创建时选择 Project。"""
+    """新线程创建请求，只允许在创建时选择 Project 与患者绑定。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -169,6 +169,16 @@ class ThreadCreate(BaseModel):
     agent_id: str
     metadata: dict | None = None
     project_id: str | None = None
+    patient_id: str | None = None
+
+
+class PatientSummary(BaseModel):
+    """会话绑定的患者脱敏摘要;绑定创建后不可变。"""
+
+    id: str
+    display_code: str
+    status: str
+    current_snapshot_id: str | None = None
 
 
 class ThreadResponse(BaseModel):
@@ -179,6 +189,7 @@ class ThreadResponse(BaseModel):
     is_pinned: bool = False
     project_id: str | None = None
     workdir_path: str
+    patient: PatientSummary | None = None
     created_at: str
     updated_at: str
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -294,6 +305,7 @@ async def create_thread(
         title=thread.title,
         metadata=thread.metadata,
         project_id=thread.project_id,
+        patient_id=thread.patient_id,
         db=db,
         current_uid=str(current_user.uid),
     )

@@ -9,8 +9,13 @@ from yuxi.models.utils import parse_assistant_message_body
 from yuxi.repositories.agent_repository import AgentRepository
 from yuxi.repositories.agent_run_repository import AgentRunRepository
 from yuxi.repositories.conversation_repository import INVOCATION_CONVERSATION_SOURCES, ConversationRepository
+from yuxi.repositories.patient_repository import PatientRepository
 from yuxi.repositories.project_repository import ProjectRepository
 from yuxi.services.attachment_service import serialize_attachment
+from yuxi.services.patient_service import (
+    require_patient_for_thread_binding,
+    serialize_patient_summary,
+)
 from yuxi.services.project_service import create_implicit_project
 from yuxi.services.workdir_service import (
     ensure_conversation_workdir_available,
@@ -78,6 +83,7 @@ async def create_thread_view(
     title: str | None,
     metadata: dict | None,
     project_id: str | None = None,
+    patient_id: str | None = None,
     db: AsyncSession,
     current_uid: str,
 ) -> dict:
@@ -97,6 +103,14 @@ async def create_thread_view(
     conv_repo = ConversationRepository(db)
     project_repo = ProjectRepository(db)
     normalized_request_id = str(request_id or "").strip() or None
+    # 患者绑定在创建事务内校验并锁定;绑定关系一经创建不可更新。
+    patient = await require_patient_for_thread_binding(
+        agent=agent_item,
+        patient_id=patient_id,
+        current_uid=str(current_uid),
+        db=db,
+    )
+    normalized_patient_id = patient.id if patient else None
     if normalized_request_id:
         existing = await conv_repo.get_conversation_by_creation_request_id(str(current_uid), normalized_request_id)
         if existing is not None:
@@ -106,6 +120,7 @@ async def create_thread_view(
                 existing_project,
                 agent_slug=agent_item.slug,
                 project_id=project_id,
+                patient_id=normalized_patient_id,
             )
             workdir_binding = workdir_binding_from_project(
                 conversation=existing,
@@ -161,6 +176,7 @@ async def create_thread_view(
             thread_id=thread_id,
             metadata=thread_metadata,
             project_id=project.id,
+            patient_id=normalized_patient_id,
             creation_request_id=normalized_request_id,
         )
         await db.commit()
@@ -183,6 +199,7 @@ async def create_thread_view(
                 thread_id=thread_id,
                 metadata=thread_metadata,
                 project_id=project.id,
+                patient_id=normalized_patient_id,
                 creation_request_id=normalized_request_id,
             )
             await db.commit()
@@ -192,6 +209,7 @@ async def create_thread_view(
             existing_project,
             agent_slug=agent_item.slug,
             project_id=project_id,
+            patient_id=normalized_patient_id,
         )
         project = existing_project
 
@@ -520,6 +538,10 @@ async def _serialize_thread(
             uid=str(conversation.uid),
             db=db,
         )
+    patient_summary = None
+    if conversation.patient_id:
+        patient = await PatientRepository(db).get_accessible(conversation.patient_id, str(conversation.uid))
+        patient_summary = serialize_patient_summary(patient)
     return {
         "id": conversation.thread_id,
         "uid": conversation.uid,
@@ -528,6 +550,7 @@ async def _serialize_thread(
         "is_pinned": bool(conversation.is_pinned),
         "project_id": conversation.project_id,
         "workdir_path": resolved_workdir_path,
+        "patient": patient_summary,
         "created_at": conversation.created_at.isoformat(),
         "updated_at": conversation.updated_at.isoformat(),
         "metadata": conversation.extra_metadata or {},
@@ -541,8 +564,9 @@ def _require_matching_thread_creation_intent(
     *,
     agent_slug: str,
     project_id: str | None,
+    patient_id: str | None = None,
 ) -> None:
-    """要求已有 Conversation 仍有效且匹配当前幂等创建意图。"""
+    """要求已有 Conversation 仍有效且匹配当前幂等创建意图;重放不同患者必须 409。"""
     if conversation.status == "deleted" or project is None or project.status == "deleted":
         raise HTTPException(status_code=409, detail="request_id 已用于已删除的 Conversation")
     same_project_intent = (
@@ -550,7 +574,8 @@ def _require_matching_thread_creation_intent(
         if project_id
         else project is not None and project.selection_status == "implicit"
     )
-    if conversation.agent_id != agent_slug or not same_project_intent:
+    same_patient_intent = getattr(conversation, "patient_id", None) == patient_id
+    if conversation.agent_id != agent_slug or not same_project_intent or not same_patient_intent:
         raise HTTPException(status_code=409, detail="request_id 已用于其他 Conversation 创建意图")
 
 

@@ -7,6 +7,7 @@ from server.routers.agent_router import agent_router
 from server.routers.auth_dept_router import department
 from server.routers.auth_router import auth
 from server.routers.chat_router import chat
+from server.routers.clinical_router import clinical
 from server.routers.dashboard_router import dashboard
 from server.routers.external_kb_router import external_kb
 from server.routers.filesystem_router import filesystem_router
@@ -36,6 +37,7 @@ router.include_router(agent_invocation_channel_router)  # /api/agent-invocation/
 router.include_router(agent_invocation_eval_router)  # /api/agent-invocation/eval/*
 router.include_router(chat)  # /api/chat/* 对话线程、消息历史与附件
 router.include_router(projects)  # /api/projects* 项目创建与选择
+router.include_router(clinical)  # /api/clinical/* 患者域:患者、授权与就诊
 router.include_router(scheduled_agents)  # /api/scheduled-tasks* 用户自建 Agent 定时任务
 
 # 管理与工作台接口：后台任务、权限域以及工具体系配置。

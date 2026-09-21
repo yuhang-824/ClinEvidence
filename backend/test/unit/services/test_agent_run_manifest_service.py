@@ -245,6 +245,7 @@ async def test_manifest_uses_prepared_context_and_persisted_overrides(monkeypatc
         return context
 
     monkeypatch.setattr(service, "prepare_agent_runtime_context", prepare)
+    monkeypatch.setattr(service, "resolve_patient_binding", AsyncMock(return_value=None))
     run = SimpleNamespace(
         id="run",
         request_id="request",
@@ -321,3 +322,43 @@ async def test_execution_preparation_rejects_missing_dependencies(monkeypatch, m
             workdir_binding=SimpleNamespace(workdir_path="projects/project"),
             worker_id="owner",
         )
+
+
+@pytest.mark.asyncio
+async def test_manifest_freezes_patient_snapshot_binding(monkeypatch):
+    """诊疗会话的 Run 在准备时固化患者快照;绑定与序列进入 write-once manifest。"""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from yuxi.agents.buildin.chatbot.context import ChatBotContext
+    from yuxi.services import agent_run_manifest_service as service
+
+    agent = SimpleNamespace(backend_id="backend", config_json={})
+    monkeypatch.setattr(
+        service, "AgentRepository", lambda db: SimpleNamespace(get_visible_by_slug=AsyncMock(return_value=agent))
+    )
+    monkeypatch.setattr(service.agent_manager, "get_agent", lambda name: SimpleNamespace(context_schema=ChatBotContext))
+    monkeypatch.setattr("yuxi.agents.context._load_workspace_agent_context", lambda uid: None)
+
+    async def prepare(context):
+        context._runtime_prepared = True
+        context._skill_runtime_snapshot = {"preloaded_skills": [], "preloaded_skill_contents": {}, "skill_metadata": {}}
+        return context
+
+    monkeypatch.setattr(service, "prepare_agent_runtime_context", prepare)
+    binding = {"patient_id": "p-1", "patient_snapshot_id": "snap-9", "patient_snapshot_sequence": 3}
+    monkeypatch.setattr(service, "resolve_patient_binding", AsyncMock(return_value=binding))
+
+    run = SimpleNamespace(
+        id="run",
+        request_id="request",
+        agent_slug="clinical",
+        run_type="chat",
+        runtime_scope_id="root",
+        conversation_thread_id="thread",
+        input_payload={},
+    )
+    result = await service.prepare_run_execution(
+        run=run, user=SimpleNamespace(uid="user"), db=object(),
+        workdir_binding=SimpleNamespace(workdir_path="projects/p"), worker_id="owner",
+    )
+    assert result.manifest["patient_binding"] == binding
