@@ -1,7 +1,7 @@
 """离线 Docling PDF 解析及可审核的结构投影。"""
 
-import hashlib
 import copy
+import hashlib
 import os
 import re
 import threading
@@ -153,8 +153,8 @@ def build_structure(document, tables):
         excluded = label in {"page_header", "page_footer"}
         note = "解析器标记为页眉/页脚，请人工确认排除" if excluded else ""
         if not text.strip():
-            # 解析器没取到文字的区域没有可索引内容：直接排除，避免占位文本进正文
-            page["issues"].append("存在空结构块，请对照原文检查")
+            # 解析器没取到文字的区域没有可索引内容：直接排除，避免占位文本进正文。
+            # 情况记在文块说明里，不再重复产生页面级 issue（那会让机器核验页看起来自相矛盾）
             text, excluded, note = PLACEHOLDER_EMPTY_BLOCK, True, EMPTY_BLOCK_EXCLUDED_NOTE
         level = min(6, int(item.get("level", 2))) if kind == "heading" else 2
         if kind == "heading":

@@ -16,9 +16,9 @@ Owner：backend/package/yuxi/knowledge/structure.py
 
 - `blank-page/v1`：该页无文本层（比对实测 `characters == 0`）、无图像与矢量图形（`has_visual_content` 为假）、没有正文文块、且没有需要人工决策的解析异常。四个条件缺一不可——只看"无文本层且无正文"会把 OCR 整体失败的扫描页当成空白页静默放行；不看异常会把解析器同时报告结构可疑的页一并放行。`has_visual_content` 必须是显式的 `False`，缺证据时不判空白。
 - `no-anomaly/v1`：存在独立文本层比对记录且覆盖达标，没有需要人工决策的异常，且无表格或图示文块。解析器自动排除的页眉页脚不产生异常，因此期刊页命中此规则。
-- 其余页保持人工核验：含表格、图示，解析器报告异常（空块、缺文本层与无正文块之外的项，如标题疑似续句、孤立文字、多来源、表格未提取），或人工介入过。
+- 其余页保持人工核验：含表格、图示，解析器报告异常（缺文本层与无正文块之外的项，如标题疑似续句、孤立文字、多来源、表格未提取；空块不再产生页面级 issue），或人工介入过。
 
-`NON_BLOCKING_ISSUES` 列出解析器对空区域与缺失文本层的固有判断（`存在空结构块`、`无可用 PDF 文本层`、`页面没有正文文块`）：它们本身不表示需要人工决策，其余 issue 都强制人工。但"不强制人工"不等于"可以进索引"——占位正文不是内容：解析器对没取到文字的区域直接写入 `excluded: True` 与说明，逐页审核里显示为"不参与检索"，人工确认原页确有内容时补充原文即可取消排除，`revise_structure` 与前端校验都拒绝让仍是占位文本的文块参与检索。表格与图示的占位不自动排除：那两类页本来就必须人工补充或排除，自动排除会让表格内容静默消失。
+`NON_BLOCKING_ISSUES` 列出解析器对缺失文本层与无正文文块的固有判断（`无可用 PDF 文本层`、`页面没有正文文块`）：它们本身不表示需要人工决策，其余 issue 都强制人工。空结构块既不在此列，也不再产生页面级 issue：解析器对没取到文字的区域直接写入排除与文块说明，若同时再挂一条"存在空结构块，请对照原文检查"，规则要求的"无异常"与解析器必然报的异常会互相打架，同一页既被机器核验、又显示一条待人工条目（第 11 页实际出现过这种自相矛盾）。"不强制人工"也不等于"可以进索引"——占位正文不是内容：解析器对没取到文字的区域直接写入 `excluded: True` 与说明，逐页审核里显示为"不参与检索"，人工确认原页确有内容时补充原文即可取消排除，`revise_structure` 与前端校验都拒绝让仍是占位文本的文块参与检索。表格与图示的占位不自动排除：那两类页本来就必须人工补充或排除，自动排除会让表格内容静默消失。
 
 判定为空白页的页连同臆造的占位文块一起清理：MinerU 在无内容页上仍会给出覆盖整页（bbox 等于页框）的空结构块，那是版面模型的假区域，保留它会让"不参与检索 + 原页如有内容请补充"看起来像内容被丢弃。空白页要求无文本层、无图像与图形、无正文文块且无结构异常，四个条件齐全才清理该页全部文块，人工仍可用"补录遗漏文块"补内容。`page_has_visual_content` 除 `get_images()`/`get_drawings()` 外还检查文本页的图片块，避免嵌套在 Form XObject 里的扫描图被漏判成空白。
 
@@ -65,20 +65,21 @@ Owner：backend/package/yuxi/knowledge/structure.py
 - 占位文块：`test/unit/knowledge/test_mineru_structure.py::test_empty_block_is_excluded_so_placeholder_never_reaches_content`（空块被排除、说明为解析器文案、审核稿正文里没有占位句、只有一个非排除文块）；`test/unit/knowledge/test_structured_pdf_review.py::test_placeholder_block_cannot_be_indexed_without_text`（取消排除被拒，补充原文后放行且正文只含补录内容）；同一文件的规则用例额外断言空白页的文块与提示被清空、有可视内容的页保留文块；`test/unit/services/test_ocr_service.py::test_page_has_visual_content_separates_blank_page_from_image_page`（空白页为假、含图页为真）；前端 `占位文块不能参与检索：占位正文未补充时保存被拦截`（占位未补充时保存被拦、勾选排除并写明原因后放行、补充原文后可取消排除）。占位文案与说明集中到 `structure.py` 常量，两个解析器共用，不再各自维护字面量。
 - 维护性回填（真实 PostgreSQL，非 HTTP）：读取 revision 1 → 61 个占位文块标记为排除 → 用源 PDF 重算逐页文本层证据（`check_native_coverage` + `page_has_visual_content`）→ 清空旧 `auto_review` 后重算规则（含空白页清理）→ `structure_report` 重算正文与来源映射 → 写入 revision 2 草稿。共运行三轮（口径与清理逻辑逐步修正），每轮先删除上一轮的草稿版本。最终 revision 2 相对 revision 1：正文占位句 61 → 0，片段 537 → 495，可用文块 1706 → 1645，53 页人工签核与说明原样保留，机器核验 52 → 67 页，第 11、92 页因新口径发现的内容缺失转为待人工。revision 1 未被改动，回滚只需删除 revision 2。最终一轮的 `require_structure_review` 按预期拦住 revision 2（第 11 页未签核），确认闸门仍然生效——草稿可以带未核验页存在，审批必须补齐。
 - 命令与结果：
-  - `docker compose exec -T api uv run --no-sync --group test pytest test/unit -m "not slow" --ignore=test/unit/services/test_run_worker.py -q -p no:cacheprovider`：2141 passed，53 skipped。
+  - `docker compose exec -T api python -m pytest test/unit -m "not slow" --ignore=test/unit/services/test_run_worker.py -q -p no:cacheprovider`：2146 passed，53 skipped（`uv run` 在本机容器内因可编辑安装的 `.pth` 文件权限失败，改用容器内 `python -m pytest`）。
   - `... pytest test/unit/knowledge test/unit/services/test_ocr_service.py test/integration/services/test_document_review.py -q`：308 passed。
   - `... pytest test/integration/api/test_structured_document_review.py -q`：2 skipped（缺 integration 凭据）。
-  - `docker compose exec -T web pnpm run test:unit`：341 passed；`lint:check` 退出码 0；`build` 退出码 0。逐页审核组件单测 5 passed。
-  - `uvx ruff@0.16.4 check`：本次改动的源文件与新增测试文件全部通过（`docling_pdf.py` 的空块分支曾被 ruff 的 F841 拦下：说明赋值后未用，实际写回的是硬编码字面量，已修）。`ruff format --check` 对 `test/unit/services/test_ocr_service.py` 报需重排，命中的是两处既有 `monkeypatch.setattr(...)` 换行（HEAD 版本同样报错，非本次引入），按"不顺手格式化"约定未处理；`check --select I` 对 `docling_pdf.py` 报 `import copy` 应位于 `import hashlib` 之前，同样为 HEAD 既有漂移。
-  - `python3 scripts/verify_engineering_contracts.py`：本记录通过；仓库存在两处既有失败，位于未提交的 `2026-09-20-review-draft-versioning.md`（类型 `simplification` 但 `## 验证` 缺"旧能力不存在："与"重新引入条件："），与本次改动无关，未修改该文件。
-  - `python3 -m unittest scripts.test_verify_engineering_contracts`：Linux 语义下 62 passed；Windows 宿主因无创建符号链接权限，`test_decision_owner_symlink_cannot_escape_repository` 报 WinError 1314，属环境限制。
-  - `cd docs && pnpm run build`：失败于 1 处既有死链 `./../../../../AGENTS`，位于已提交的 `proposed/2026-09-18-clinevidence-thread-patient-binding.md`；本记录与新增交叉链接未引入死链。
-  - `git diff --check`：通过。
+  - `docker compose exec -T web pnpm run test:unit`：360 passed；`lint:check` 退出码 0；`build` 退出码 0。逐页审核组件与面板单测 8 passed。
+  - `uvx ruff@0.16.4`：三条 CI 门禁 `check package`、`format package --check`、`check --select I package` 全部通过。CI 的 ruff 作业只检查 `package`；仓库既有漂移（`milvus.py` 的 E501、`chat_service.py` 与 `document_review_service.py` 的换行、11 处导入顺序）已在同一变更内一并清理，`test/` 与 `server/` 下另有 23 个文件会被 `ruff format --check` 重排、24 条 lint 报错，它们不在任何门禁范围内，未处理。
+  - 前后端契约漂移守卫：`scripts/verify_engineering_contracts.py` 的 `_validate_review_contract_constants` 比较 `structure.py` 的 `AUTO_REVIEW_RULE_*`、`PLACEHOLDER_PREFIXES` 与 `StructuredDocumentReview.vue` 中镜像的 `AUTO_REVIEW_LABELS`、`PLACEHOLDER_PREFIXES`。守卫按常量名取全部规则 id（新增规则不改守卫也能被发现）、接受单双引号与 `Object.freeze([...])` 包装、只扫 `AUTO_REVIEW_LABELS` 对象字面量（避免其它 `'xxx/v1':` 键误报），并且**双侧都缺才跳过**：只剩一侧、或两侧在但解析为空都报"无法比对"——防漂移守卫解析不出来就等于没守。负向案例七项：规则 id 漂移、占位前缀漂移、后端新增规则而前端没镜像、前端改用双引号键、前缀被 `Object.freeze` 包装、只剩前端一侧、常量被改名导致解析为空（后五项都是早期实现会静默放过的形态）。
+  - `python3 scripts/verify_engineering_contracts.py`：通过（123 decisions / 5 workflows / 4 agents files / 175 docs / 25 routers / 252 web sources / 5 review contract constants）。此前两处既有失败（`2026-09-20-review-draft-versioning.md` 类型为 `simplification` 却缺「旧能力不存在：」「重新引入条件：」）已在该记录内补齐。
+  - `python3 -m unittest scripts.test_verify_engineering_contracts`：Ran 69 tests，68 passed、1 error（含上述七项负向用例）；Windows 宿主因无创建符号链接权限，`test_decision_owner_symlink_cannot_escape_repository` 报 WinError 1314，属环境限制——干净 HEAD 上同一用例同样失败，与本次改动无关。
+  - 文档链接：根目录与 `docs/`、`web/`、`backend/` 下的 184 个 Markdown 文件（含未跟踪文件）共 265 条相对链接、0 死链（独立复核者按另一口径扫到 182 个文件 256 条链接、同样 0 死链）；此前 `proposed/2026-09-18-clinevidence-thread-patient-binding.md` 的 `./../../../../AGENTS` 死链已修正为 `../../../../AGENTS.md`。
 
 ## 未解决
 
 - 真实 HTTP integration `test/integration/api/test_structured_document_review.py::test_machine_verified_pages_need_no_human_signature`（解析 → 免签审批 → 改动后拦截 → 补签 → 入库的 HTTP 全链路）已写入但本机未执行：integration fixture 需要 `TEST_USERNAME`/`TEST_PASSWORD`，当前环境未配置，测试按既有约定 skip。同一契约由上面的真实链路（worker + repository + Milvus，缺 HTTP 层）与 unit 覆盖，接入凭据后应重跑并以其结果为准。
-- 后端全量 unit 未包含 `test/unit/services/test_run_worker.py`：该文件在本机执行时挂起（收集 50 项正常，4.31 秒完成），与既有多份记录描述的本机卡点一致，本次未处理；本次改动不触及该文件的模块级导入链（收集成功即为证据）。
+- 后端全量 unit 未包含 `test/unit/services/test_run_worker.py`：该文件在全量运行时挂起，单独运行通过（50 passed，13.34 秒），与既有多份记录描述的本机卡点一致，本次未处理；本次改动不触及该文件的模块级导入链（收集成功即为证据）。
+- 空结构块不再产生页面级 issue 后，解析器侧"这一区域没取到文字"只体现在文块说明与排除标记上；若解析器把一个原本有内容的区域判为空，人工只能靠逐页阅读发现。当前依赖独立文本层比对（缺字证据）覆盖该风险，未单独构造"解析器误判整块为空"的负向样本。
 - 上面的真实链路验证是直接调用服务与仓储层完成的，未经 HTTP 路由与权限依赖；路由本次未改动，但"管理员经 API 完成上述流程"仍属未验证范围。
 - 比对按字符集合进行，因此"文字齐全但页内顺序错乱或文块被重复"不会被文本层比对发现；这类页若同时没有结构异常就会机器核验。当前依赖解析器自身的结构 issue、表格与图示判定来覆盖，未单独构造乱序或重复的负向样本。
 - 文本层比对判定的是「这段连续文字在解析结果里找不到」，不区分「整段丢失」与「内容在、但被解析器切分或重排成别的顺序」；实测该文档 275 个被标记片段里 195 个在全文中连 6 字窗口都找不到（确定丢失），80 个存在局部匹配（需人工确认是重排还是部分丢失）。抽查到的样例在解析结果中确实整段不存在。

@@ -216,7 +216,8 @@ def test_empty_block_is_excluded_so_placeholder_never_reaches_content():
     assert empty["excluded"] is True
     assert empty["note"] == "解析器未取到该区域文字，已排除；原页如有内容请补充后取消排除"
     assert body["excluded"] is False
-    assert "存在空结构块，请对照原文检查" in structure["pages"][0]["issues"]
+    # 空块不再产生页面级 issue：说明与排除标记落在文块自身
+    assert structure["pages"][0]["issues"] == []
 
     content, report = structure_report(structure)
     assert "空结构块" not in content

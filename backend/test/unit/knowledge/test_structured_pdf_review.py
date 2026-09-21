@@ -151,6 +151,24 @@ def test_picture_children_and_orphan_text_are_retained():
     assert any("主阅读树" in issue for issue in structure["pages"][0]["issues"])
 
 
+def test_empty_docling_block_is_excluded_without_extra_page_issue():
+    """解析器没取到文字的区域直接排除并写明原因，不再另留一条自相矛盾的页面级 issue。"""
+    prov = [{"page_no": 1, "bbox": {"l": 10, "r": 100, "t": 750, "b": 700, "coord_origin": "BOTTOMLEFT"}}]
+    document = {
+        "pages": {"1": {"size": {"width": 600, "height": 800}}},
+        "body": {"children": [{"$ref": "empty"}]},
+        "texts": [{"self_ref": "empty", "label": "text", "prov": prov, "text": "   "}],
+    }
+    structure = build_structure(document, {})
+
+    block = structure["blocks"][0]
+    assert block["excluded"] is True
+    assert block["text"] == PLACEHOLDER_EMPTY_BLOCK
+    assert block["note"] == EMPTY_BLOCK_EXCLUDED_NOTE
+    # 只保留"该页没有正文文块"这条固有判断；再挂一条"存在空结构块"会让机器核验页自相矛盾
+    assert structure["pages"][0]["issues"] == ["页面没有正文文块：确认空白页或补录遗漏内容"]
+
+
 def test_native_coverage_records_absent_characters_and_scanned_page():
     """独立文本层把解析结果完全找不到的连续片段记为缺失，扫描页不伪报百分百覆盖。"""
     structure = sample()
@@ -310,11 +328,9 @@ def test_machine_review_clears_only_pages_without_anomalies():
             {"id": "short", "page": 9, "kind": "paragraph", "text": "正文"},
         ],
     }
-    structure["pages"][0]["issues"].append("存在空结构块，请对照原文检查")
     structure["pages"][2]["issues"].append("独立文本层比对：40/100 个字符未出现在解析结果中")
     structure["pages"][4]["issues"].append("无可用 PDF 文本层，OCR 完整性须逐字对照原页")
     structure["pages"][5]["issues"].append("无可用 PDF 文本层，OCR 完整性须逐字对照原页")
-    structure["pages"][5]["issues"].append("存在空结构块，请对照原文检查")
     structure["pages"][6]["issues"].append("无可用 PDF 文本层，OCR 完整性须逐字对照原页")
     structure["pages"][7]["issues"].append("无可用 PDF 文本层，OCR 完整性须逐字对照原页")
     # 第 8 页缺 has_visual_content 证据：不能判空白
