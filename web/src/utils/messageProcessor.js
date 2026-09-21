@@ -1,3 +1,5 @@
+import { sortChunksBySource } from './kbChunkScore.js'
+
 /** 内置知识库检索工具：结果按 kb_id 归组，而不是按工具名当作库名。 */
 const KNOWLEDGE_RETRIEVAL_TOOLS = new Set(['query_kb'])
 
@@ -243,13 +245,9 @@ export class MessageProcessor {
       }
     }
 
-    normalizedChunks.sort((a, b) => {
-      const scoreA = typeof a.score === 'number' ? a.score : Number.NEGATIVE_INFINITY
-      const scoreB = typeof b.score === 'number' ? b.score : Number.NEGATIVE_INFINITY
-      return scoreB - scoreA
-    })
-
-    return normalizedChunks
+    // 按生成回答时实际生效的相关度降序：重排是每个知识库自己的查询参数，
+    // 因此按来源（kb_id）各自排序，跨库不比较分数
+    return sortChunksBySource(normalizedChunks)
   }
 
   /**

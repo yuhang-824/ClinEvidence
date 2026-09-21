@@ -817,3 +817,119 @@ test('占位文块不能参与检索：占位正文未补充时保存被拦截',
     await server.close()
   }
 })
+
+test('保存成功后重设基线：保存按钮不再一直是可点状态', async () => {
+  const source = readFileSync(
+    new URL('../../src/components/knowledge/StructuredDocumentReview.vue', import.meta.url),
+    'utf8'
+  )
+  const server = await createServer({
+    server: { middlewareMode: true, hmr: false },
+    appType: 'custom',
+    plugins: [
+      {
+        name: 'structured-review-rebaseline-test',
+        resolveId(id) {
+          if (id === 'virtual:structure-rebaseline') return '\0structure-rebaseline'
+        },
+        load(id) {
+          if (id !== '\0structure-rebaseline') return
+          return compileScript(parse(source).descriptor, {
+            id: 'structure-rebaseline',
+            inlineTemplate: true
+          }).content.replace(
+            /import \{ documentApi \} from '@\/apis\/knowledge_api'/,
+            'const documentApi = { getReviewSource: async () => new Blob(["fixture"]) }'
+          )
+        }
+      }
+    ]
+  })
+  const node = (type) => ({ type, children: [], props: {}, parent: null })
+  const renderer = createRenderer({
+    createElement: node,
+    createText: (text) => ({ ...node('text'), text }),
+    createComment: () => node('comment'),
+    insert(child, parent, anchor) {
+      if (child.parent) child.parent.children.splice(child.parent.children.indexOf(child), 1)
+      child.parent = parent
+      const i = anchor ? parent.children.indexOf(anchor) : -1
+      if (i < 0) parent.children.push(child)
+      else parent.children.splice(i, 0, child)
+    },
+    remove(child) {
+      child.parent.children.splice(child.parent.children.indexOf(child), 1)
+    },
+    setText(child, text) {
+      child.text = text
+    },
+    setElementText(child, text) {
+      child.text = text
+      child.children = []
+    },
+    parentNode: (child) => child.parent,
+    nextSibling: (child) =>
+      child.parent?.children[child.parent.children.indexOf(child) + 1] || null,
+    patchProp(child, key, _old, value) {
+      child.props[key] = value
+    }
+  })
+  let app
+  let root
+  try {
+    const { default: Panel } = await server.ssrLoadModule('virtual:structure-rebaseline')
+    const editorRef = ref(null)
+    const structure = {
+      pages: [
+        {
+          page: 1,
+          width: 100,
+          height: 100,
+          checks: { reading_order: true, text_complete: true, relationships: true },
+          note: '已核对',
+          auto_review: { rule: 'no-anomaly/v1' }
+        }
+      ],
+      blocks: [{ id: 'b1', page: 1, kind: 'paragraph', text: '第一页', source_text: '第一页', bbox: [0, 0, 1, 1] }]
+    }
+    root = node('root')
+    app = renderer.createApp(() =>
+      h(Panel, { ref: editorRef, structure, kbId: 'kb', fileId: 'f', version: 1, editable: true })
+    )
+    for (const name of [
+      'a-button',
+      'a-select',
+      'a-checkbox',
+      'a-input',
+      'a-textarea',
+      'a-input-number',
+      'a-alert',
+      'a-spin'
+    ]) {
+      app.component(name, {
+        inheritAttrs: false,
+        setup(_, { attrs, slots }) {
+          return () => h(name, attrs, slots.default?.())
+        }
+      })
+    }
+    app.mount(root)
+    const all = (item) => [item, ...item.children.flatMap(all)]
+    const textOf = (item) => (item.text || '') + item.children.map(textOf).join('')
+    const saveButton = () => all(root).find((n) => n.type === 'a-button' && textOf(n) === '保存结构修订')
+    await new Promise((r) => setImmediate(r))
+
+    assert.equal(saveButton().props.disabled, true)
+    all(root).filter((n) => n.type === 'a-textarea')[0].props.onChange({ target: { value: '人工改写' } })
+    await nextTick()
+    assert.equal(saveButton().props.disabled, false)
+
+    // 保存成功后由面板调用：当前状态成为新基线，按钮回到禁用
+    editorRef.value.rebaseline()
+    await nextTick()
+    assert.equal(saveButton().props.disabled, true)
+  } finally {
+    app?.unmount()
+    await server.close()
+  }
+})

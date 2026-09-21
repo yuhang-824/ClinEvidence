@@ -62,3 +62,29 @@ test('两组都缺分数时退回文件名排序', () => {
     ['aa-无分数.md', 'zz-无分数.md']
   )
 })
+
+test('未启用重排的知识库不会因为缺重排分而整体沉底', () => {
+  const groups = groupKnowledgeChunks([
+    // kb-1 开了重排：重排分高于向量分，但另一个库没有重排分
+    { kb_id: 'kb-1', file_id: 'file-1', content: 'A', score: 0.3, rerank_score: 0.2, metadata: { source: 'a.md' } },
+    // kb-2 没开重排：只有向量分，必须用自己的分数参与排序而不是被判为缺失
+    { kb_id: 'kb-2', file_id: 'file-2', content: 'B', score: 0.9, metadata: { source: 'b.md' } }
+  ])
+
+  assert.deepEqual(
+    groups.map((group) => group.filename),
+    ['b.md', 'a.md']
+  )
+})
+
+test('分组带上 metadata 里的知识库与文件标识，打开原文的入口才出现', () => {
+  // 归一化后的片段只有 metadata 里有 kb_id/file_id；丢了它们，依赖分组的"查看完整文件"不会渲染
+  const groups = groupKnowledgeChunks([
+    { content: 'A', metadata: { source: 'a.md', kb_id: 'kb-1', file_id: 'file-1' } },
+    { content: 'B', metadata: { source: 'a.md', kb_id: 'kb-1', file_id: 'file-1' } }
+  ])
+
+  assert.equal(groups.length, 1)
+  assert.equal(groups[0].kb_id, 'kb-1')
+  assert.equal(groups[0].file_id, 'file-1')
+})

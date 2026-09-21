@@ -260,11 +260,12 @@ async function saveStructure(structure) {
       await documentApi.changeDocumentReview(props.kbId, props.fileId, {
         action: 'save',
         version: current.value.version,
-        baseSavedAt: current.value?.created_at,
+        base_saved_at: current.value?.created_at,
         structure
       })
     )
     await nextTick()
+    structureEditor.value?.rebaseline?.()
     structureEditor.value?.goToNextUnreviewedPage?.(fromPage)
     message.success('结构修订与逐页核验已保存，批准前请完成全部页面核验')
   } catch (e) {
@@ -288,7 +289,7 @@ async function saveBoundaries(boundaries) {
       await documentApi.changeDocumentReview(props.kbId, props.fileId, {
         action: 'boundaries',
         version: current.value.version,
-        baseSavedAt: current.value?.created_at,
+        base_saved_at: current.value?.created_at,
         boundaries
       })
     )
@@ -375,7 +376,7 @@ async function act(action) {
       await documentApi.changeDocumentReview(props.kbId, props.fileId, {
         action,
         version: latest.value?.version || 0,
-        ...(action === 'save' ? { content: draft.value, baseSavedAt: latest.value?.created_at } : {})
+        ...(action === 'save' ? { content: draft.value, base_saved_at: latest.value?.created_at } : {})
       })
     )
     message.success(action === 'approve' ? '已审核，可执行切片入库' : '已保存清洗稿')

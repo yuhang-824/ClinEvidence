@@ -18,6 +18,7 @@ test('未保存修订不能审核或入库；保存后审核最新版本；失�
         content: 'cleaned',
         raw_content: 'raw',
         report: { changes: [], warnings: [] },
+        created_at: '2026-09-20T10:00:00',
         approved_at: null
       }
     ]
@@ -27,19 +28,21 @@ test('未保存修订不能审核或入库；保存后审核最新版本；失�
     changeDocumentReview: async (_kb, _file, payload) => {
       calls.push(payload)
       if (fail) throw new Error('版本冲突')
-      if (payload.action === 'save' || payload.action === 'boundaries')
-        record.revisions.push({
-          ...record.revisions.at(-1),
-          version: record.revisions.at(-1).version + 1,
-          content: payload.content ?? record.revisions.at(-1).content,
-          approved_at: null,
+      if (payload.action === 'save' || payload.action === 'boundaries') {
+        // 与仓储一致：未审核的草稿原地更新，已审核后才生成新草稿版本
+        const latest = record.revisions.at(-1)
+        const next = {
+          ...latest,
+          content: payload.content ?? latest.content,
           report:
             payload.action === 'boundaries'
               ? { chunk_boundaries: payload.boundaries === null ? null : [...payload.boundaries] }
               : {},
           raw_content: null
-        })
-      else record.revisions.at(-1).approved_at = '2026-09-18'
+        }
+        if (latest.approved_at) record.revisions.push({ ...next, version: latest.version + 1, approved_at: null })
+        else Object.assign(latest, next)
+      } else record.revisions.at(-1).approved_at = '2026-09-18'
       return structuredClone(record)
     },
     previewDocumentChunks: async (_kb, _file, payload) => ({
@@ -182,10 +185,13 @@ test('未保存修订不能审核或入库；保存后审核最新版本；失�
     await button('保存修订').props.onClick()
     await flush()
     assert.equal(calls[0].content, 'edited')
+    // 草稿原地更新：保存请求必须带上加载草稿时的时间戳，服务端据此拒绝并发覆盖
+    assert.equal(calls[0].base_saved_at, '2026-09-20T10:00:00')
+    assert.equal(calls[0].version, 1)
     assert.equal(button('审核通过').props.disabled, false)
     await button('审核通过').props.onClick()
     await flush()
-    assert.equal(calls[1].version, 2)
+    assert.equal(calls[1].version, 1)
     assert.equal(button('切片入库').props.disabled, true)
     await button('预览切片').props.onClick()
     await flush()
@@ -198,7 +204,7 @@ test('未保存修订不能审核或入库；保存后审核最新版本；失�
     await flush()
     await button('切片入库').props.onClick()
     await flush()
-    assert.equal(calls[2].index.review_version, 2)
+    assert.equal(calls[2].index.review_version, 1)
     await button('预览切片').props.onClick()
     await flush()
     await button('修复切片').props.onClick()
@@ -297,7 +303,11 @@ test('审核通过前置校验拦截未核验结构并显示具体原因，通�
               /import StructuredDocumentReview from '[^']+'/,
               `const StructuredDocumentReview = {
                 render() { return null },
-                methods: { validate: (scope) => (scope === 'approve' ? [...globalThis.__reviewGuardProblems] : []) }
+                mounted() { globalThis.__reviewEditor = this },
+                methods: {
+                  validate: (scope) => (scope === 'approve' ? [...globalThis.__reviewGuardProblems] : []),
+                  rebaseline() { globalThis.__rebaselines = (globalThis.__rebaselines || 0) + 1 }
+                }
               }`
             )
             .replace(
@@ -400,9 +410,18 @@ test('审核通过前置校验拦截未核验结构并显示具体原因，通�
     assert.equal(calls.length, 1)
     assert.equal(calls[0].action, 'approve')
     assert.equal(find(root, (item) => item.props.message === '第 1 页尚未完成阅读顺序、完整性和对应关系核验'), undefined)
+
+    // 结构修订保存成功后必须让编辑器把当前状态认作已保存基线：草稿原地更新不重挂编辑器，
+    // 少了这一步"未保存"标记不会复位，保存按钮会一直可点
+    globalThis.__rebaselines = 0
+    globalThis.__reviewEditor.$emit('save', { blocks: [], pages: [] })
+    await flush()
+    assert.equal(calls.at(-1).action, 'save')
+    assert.equal(globalThis.__rebaselines, 1)
   } finally {
     app?.unmount()
     await server.close()
     delete globalThis.__reviewApi
+    delete globalThis.__reviewEditor
   }
 })

@@ -200,7 +200,7 @@ function requestSave() {
   error.value = ''
   emit('save', payload.value)
 }
-defineExpose({ locateBlock, validate, getCurrentPage, goToNextUnreviewedPage })
+defineExpose({ locateBlock, validate, getCurrentPage, goToNextUnreviewedPage, rebaseline })
 
 function getCurrentPage() {
   return pageNumber.value
@@ -232,8 +232,13 @@ const payload = computed(() => ({
   blocks: blocks.value,
   pages: pages.value.map(({ page, checks, note }) => ({ page, checks, note }))
 }))
-const initial = JSON.stringify(payload.value)
-const dirty = computed(() => JSON.stringify(payload.value) !== initial)
+// 必须是响应式值：普通变量变化不会让 dirty 这个 computed 失效
+const savedSnapshot = ref(JSON.stringify(payload.value))
+const dirty = computed(() => JSON.stringify(payload.value) !== savedSnapshot.value)
+// 保存成功后把当前状态认作已保存基线：版本原地更新时组件不会重挂，否则保存按钮会一直可点
+function rebaseline() {
+  savedSnapshot.value = JSON.stringify(payload.value)
+}
 watch(dirty, (value) => emit('dirty-change', value))
 const pageOptions = computed(() =>
   pages.value.map((p) => ({ value: p.page, label: `第 ${p.page} 页${pageSuffix(p)}` }))

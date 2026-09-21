@@ -27,6 +27,7 @@
         <div class="chunk-summary" aria-label="片段数量">
           <strong>{{ chunks.length }}</strong>
           <span>个片段</span>
+          <span v-if="orderingLabel" class="chunk-ordering">按{{ orderingLabel }}降序</span>
         </div>
         <button
           type="button"
@@ -95,6 +96,7 @@
 import { computed, useId } from 'vue'
 import { FileText, X } from '@lucide/vue'
 import MarkdownPreview from '@/components/common/MarkdownPreview.vue'
+import { scoreSourceLabel } from '@/utils/kbChunkScore.js'
 
 const props = defineProps({
   open: {
@@ -130,6 +132,9 @@ const hasScore = (value) => typeof value === 'number' && Number.isFinite(value)
 const formatScore = (value) => `${(value * 100).toFixed(1)}%`
 
 const formatChunkIndex = (index) => String(index + 1).padStart(2, '0')
+
+// 列表按生成回答时生效的分数排序：有重排分用重排分，否则用相似度
+const orderingLabel = computed(() => (chunks.value.length ? scoreSourceLabel(chunks.value) : ''))
 
 const getPageRange = (chunk) => {
   const pages = chunk?.metadata?.source_metadata?.pages
@@ -340,6 +345,11 @@ const getLineRange = (chunk) => {
     font-size: 11px;
     font-variant-numeric: tabular-nums;
     font-weight: 600;
+  }
+
+  .chunk-ordering {
+    color: var(--color-text-tertiary);
+    font-size: 12px;
   }
 
   .chunk-location {

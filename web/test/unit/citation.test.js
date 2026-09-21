@@ -2,6 +2,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { chunkPages, citationFromAttributes, resolveCitation, stripIncompleteCitation } from '../../src/utils/citation.js'
+import {
+  effectiveScore,
+  scoreSourceLabel,
+  sortChunksByScore,
+  sortChunksBySource,
+  usesRerankScore
+} from '../../src/utils/kbChunkScore.js'
 import { MessageProcessor } from '../../src/utils/messageProcessor.js'
 import { createMarkdownRenderer } from '../../src/utils/markdown_preview.js'
 
@@ -176,4 +183,158 @@ test('正文里的比较符号不会被当成半截标签吃掉', () => {
   // 真正的半截标签仍然要被截掉
   assert.equal(stripIncompleteCitation('结论<cit'), '结论')
   assert.equal(stripIncompleteCitation('结论<cite source="指南.pdf"'), '结论')
+})
+
+test('启用重排时列表按重排分排序，与生成回答时的顺序一致', () => {
+  const conv = {
+    messages: [
+      {
+        type: 'ai',
+        tool_calls: [
+          {
+            name: 'query_kb',
+            tool_call_result: {
+              content: JSON.stringify({
+                kb_id: 'kb_1',
+                results: [
+                  {
+                    id: 'vector-first',
+                    kb_id: 'kb_1',
+                    file_id: 'file_1',
+                    content: '向量分高但重排分低',
+                    metadata: { source: '指南.pdf', chunk_id: 'a', score: 0.92, rerank_score: 0.18 }
+                  },
+                  {
+                    id: 'rerank-first',
+                    kb_id: 'kb_1',
+                    file_id: 'file_1',
+                    content: '向量分低但重排分高',
+                    metadata: { source: '指南.pdf', chunk_id: 'b', score: 0.55, rerank_score: 0.91 }
+                  }
+                ]
+              })
+            }
+          }
+        ]
+      }
+    ]
+  }
+
+  const chunks = MessageProcessor.extractKnowledgeChunksFromConversation(conv, [])
+  // 排序依据是重排分：上面那条不会因为向量分更高而排前面
+  assert.deepEqual(
+    chunks.map((chunk) => chunk.content),
+    ['向量分低但重排分高', '向量分高但重排分低']
+  )
+  assert.deepEqual(
+    chunks.map((chunk) => effectiveScore(chunk, usesRerankScore(chunks))),
+    [0.91, 0.18]
+  )
+  assert.equal(scoreSourceLabel(chunks), '重排分')
+})
+
+test('只有部分片段带重排分时整组按重排分排序，不混用两种量纲', () => {
+  const mixed = [
+    { content: '只有向量分，分数更高', score: 0.95 },
+    { content: '带重排分，向量分低', score: 0.2, rerank_score: 0.4 },
+    { content: '只有向量分，分数更低', score: 0.1 }
+  ]
+
+  // 有重排分就整组按重排分：缺分的排最后，不会拿向量分与重排分直接比大小
+  assert.equal(usesRerankScore(mixed), true)
+  assert.equal(scoreSourceLabel(mixed), '重排分')
+  assert.deepEqual(
+    sortChunksByScore(mixed).map((item) => item.content),
+    ['带重排分，向量分低', '只有向量分，分数更高', '只有向量分，分数更低']
+  )
+  // 全组都没有重排分时才退回向量分
+  const plain = [{ content: 'a', score: 0.1 }, { content: 'b', score: 0.9 }]
+  assert.equal(scoreSourceLabel(plain), '相似度')
+  assert.deepEqual(sortChunksByScore(plain).map((item) => item.content), ['b', 'a'])
+  // 不修改入参
+  assert.equal(mixed[0].content, '只有向量分，分数更高')
+})
+
+test('多个知识库合并时各按自己的依据排序，未开重排的库不被沉底', () => {
+  // 普通库排在前面：它没有 rerank_score，若按"整条合并列表统一判定"就会被判为缺失分数
+  // 而排到最后，与下面期望的顺序不同——这条用例因此能真的拦住那种实现
+  const conv = {
+    messages: [
+      {
+        type: 'ai',
+        tool_calls: [
+          {
+            name: 'query_kb',
+            tool_call_result: {
+              content: JSON.stringify({
+                kb_id: 'kb_plain',
+                results: [
+                  {
+                    id: 'p1',
+                    kb_id: 'kb_plain',
+                    file_id: 'f2',
+                    content: '普通库第一',
+                    metadata: { source: 'p.pdf', score: 0.7 }
+                  },
+                  {
+                    id: 'p2',
+                    kb_id: 'kb_plain',
+                    file_id: 'f2',
+                    content: '普通库第二',
+                    metadata: { source: 'p.pdf', score: 0.5 }
+                  }
+                ]
+              })
+            }
+          },
+          {
+            name: 'query_kb',
+            tool_call_result: {
+              content: JSON.stringify({
+                kb_id: 'kb_rerank',
+                results: [
+                  {
+                    id: 'r-low',
+                    kb_id: 'kb_rerank',
+                    file_id: 'f1',
+                    content: '重排低',
+                    metadata: { source: 'r.pdf', score: 0.9, rerank_score: 0.1 }
+                  },
+                  {
+                    id: 'r-high',
+                    kb_id: 'kb_rerank',
+                    file_id: 'f1',
+                    content: '重排高',
+                    metadata: { source: 'r.pdf', score: 0.2, rerank_score: 0.8 }
+                  }
+                ]
+              })
+            }
+          }
+        ]
+      }
+    ]
+  }
+
+  const chunks = MessageProcessor.extractKnowledgeChunksFromConversation(conv, [])
+  // 归一化只把知识库标识放在 metadata 里，分桶必须认它，否则两库会并成一个桶
+  assert.deepEqual(
+    chunks.map((chunk) => chunk.kb_id ?? chunk.metadata.kb_id),
+    ['kb_plain', 'kb_plain', 'kb_rerank', 'kb_rerank']
+  )
+  assert.deepEqual(
+    chunks.map((chunk) => chunk.content),
+    ['普通库第一', '普通库第二', '重排高', '重排低']
+  )
+  assert.deepEqual(
+    sortChunksBySource(chunks).map((chunk) => chunk.content),
+    ['普通库第一', '普通库第二', '重排高', '重排低']
+  )
+})
+
+test('完全没有分数时不宣称按某种分数排序', () => {
+  // 外部只读知识库的结果没有分数，列表保持检索返回顺序，标注不能凭空说"按相似度降序"
+  assert.equal(scoreSourceLabel([{ score: null }, { score: null }]), '')
+  assert.equal(scoreSourceLabel([]), '')
+  assert.equal(scoreSourceLabel([{ score: 0 }]), '相似度')
 })

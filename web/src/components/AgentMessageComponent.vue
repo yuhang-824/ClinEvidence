@@ -116,7 +116,7 @@
             </a-button>
           </div>
         </template>
-        <p v-else class="citation-warning">未找到对应片段，该引用可能不准确，请以原文为准。</p>
+        <p v-else class="citation-warning">{{ citationUnresolvedWarning }}</p>
       </div>
     </a-modal>
 
@@ -372,6 +372,11 @@ const citationPageWarning = computed(() => {
   const page = citationCard.value?.citation?.page
   return `检索到的片段没有覆盖第 ${page} 页，下面展示的是该文件相关度最高的片段，请打开原文核对。`
 })
+
+// 本轮检索结果里没有这份文件：可能引用了更早检索到的内容，也可能是引用有误，两者都要说清
+const citationUnresolvedWarning = computed(
+  () => '本轮检索结果中没有该文件的片段，可能是引用了更早检索到的内容，也可能引用有误；请以原文为准。'
+)
 
 const citationSnippetLabel = computed(() =>
   citationCard.value?.resolution?.pageMatched ? '该页检索到的片段' : '该文件相关度最高的片段'
