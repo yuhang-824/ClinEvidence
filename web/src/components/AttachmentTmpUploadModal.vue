@@ -17,7 +17,7 @@
       class="attachment-dropzone"
     >
       <p class="dropzone-title">点击或拖拽文件到此处上传</p>
-      <p class="dropzone-desc">支持任意文件格式 ≤ 5 MB；PDF 和图片可选解析为 Markdown。</p>
+      <p class="dropzone-desc">支持任意文件格式 ≤ 50 MB；PDF 和图片可选解析为 Markdown。</p>
     </a-upload-dragger>
 
     <div v-if="fileItems.length" class="attachment-list">

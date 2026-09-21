@@ -13,7 +13,7 @@
           class="config-dropdown-item"
           :class="{ disabled }"
           :disabled="disabled"
-          title="支持任意文件格式 ≤ 5 MB"
+          title="支持任意文件格式 ≤ 50 MB"
           @click="handleAttachmentClick"
         >
           <FileText :size="15" class="config-dropdown-item-icon" />
@@ -26,7 +26,7 @@
           class="config-dropdown-item"
           :class="{ disabled }"
           :disabled="disabled"
-          title="支持 jpg/jpeg/png/gif，≤ 5 MB"
+          title="支持 jpg/jpeg/png/gif，≤ 50 MB"
           @click="handleImageUpload"
         >
           <Image :size="15" class="config-dropdown-item-icon" />

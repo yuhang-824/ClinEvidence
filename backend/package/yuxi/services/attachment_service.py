@@ -24,7 +24,7 @@ from yuxi.utils.logging_config import logger
 from yuxi.utils.upload_utils import read_upload_with_limit
 
 ATTACHMENT_ALLOWED_EXTENSIONS: tuple[str, ...] = ()
-MAX_ATTACHMENT_SIZE_BYTES = 5 * 1024 * 1024  # 5 MB
+MAX_ATTACHMENT_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB;病历类扫描 PDF 普遍超过 5 MB
 MAX_ATTACHMENT_MARKDOWN_CHARS = 32_000  # TODO: 转 MARKDOWN的时候，不应该裁剪
 TMP_ATTACHMENT_PREFIX = "tmp/chat_attachments"
 TMP_ATTACHMENT_PARSE_EXTENSIONS = (*PDF_FILE_EXTENSIONS, *IMAGE_FILE_EXTENSIONS)
@@ -279,7 +279,7 @@ async def upload_tmp_attachment_view(*, file: UploadFile, current_uid: str) -> d
         file_content = await read_upload_with_limit(
             file,
             max_size_bytes=MAX_ATTACHMENT_SIZE_BYTES,
-            too_large_message="附件过大，当前仅支持 5 MB 以内的文件",
+            too_large_message="附件过大，当前仅支持 50 MB 以内的文件",
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
