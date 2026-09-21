@@ -436,26 +436,33 @@ async def _parse_batch_originals(context, versions, signals: list[str]) -> list[
     return parsed
 
 
-async def fail_patient_record_ingest(context, error: str) -> None:
-    """任务失败收敛:批次落 failed 并保留错误码,不更新任何已发布事实。"""
-    from yuxi.storage.postgres.manager import pg_manager
+async def fail_patient_record_ingest(session, task_record, error: str) -> None:
+    """任务失败收敛:批次落 failed 并保留错误码,不更新任何已发布事实。
 
-    batch_id = (context.payload or {}).get("batch_id")
+    签名对齐框架约定 (session, task_record, error);batch_id 从任务 payload 读取。
+    """
+    payload = getattr(task_record, "payload", None)
+    if isinstance(payload, str):
+        import json as _json
+
+        try:
+            payload = _json.loads(payload)
+        except ValueError:
+            payload = {}
+    batch_id = (payload or {}).get("batch_id")
     if not batch_id:
         return
-    pg_manager.initialize()
-    async with pg_manager.get_async_session_context() as db:
-        import_repo = PatientImportRepository(db)
-        batch = await import_repo.lock_batch(batch_id)
-        if batch is None or batch.status == "published":
-            return
-        try:
-            await import_repo.transition_batch(batch, "failed")
-        except ValueError:
-            logger.warning(f"batch {batch_id} terminal status keeps {batch.status} after task failure")
-            return
-        batch.error_code = "ingest_failed"
-        await db.commit()
+    import_repo = PatientImportRepository(session)
+    batch = await import_repo.lock_batch(batch_id)
+    if batch is None or batch.status == "published":
+        return
+    try:
+        await import_repo.transition_batch(batch, "failed")
+    except ValueError:
+        logger.warning(f"batch {batch_id} terminal status keeps {batch.status} after task failure")
+        return
+    batch.error_code = "ingest_failed"
+    await session.commit()
 
 
 CLINICAL_TMP_PREFIX = "clinical-records-tmp"
