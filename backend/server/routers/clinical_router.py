@@ -140,6 +140,7 @@ class RecordConfirmRequest(BaseModel):
     tmp_file_ids: list[str] = Field(min_length=1, max_length=20)
     document_type: str = Field(max_length=64)
     visit_id: str | None = Field(None, max_length=64)
+    event_started_at: datetime | None = None
     idempotency_key: str | None = Field(None, max_length=128)
 
 
@@ -169,6 +170,7 @@ async def confirm_records(
         tmp_file_ids=payload.tmp_file_ids,
         document_type=payload.document_type,
         visit_id=payload.visit_id,
+        event_started_at=payload.event_started_at,
         idempotency_key=payload.idempotency_key,
         db=db,
     )
@@ -234,6 +236,36 @@ async def index_revision(
 ):
     """将文块编码写入患者向量投影;未配置向量模型时显式失败。"""
     return await patient_snapshot.index_revision_chunks(
+        revision_id=revision_id, current_uid=str(current_user.uid), db=db
+    )
+
+
+@clinical.post("/import-batches/{batch_id}/finalize")
+async def finalize_import_batch(
+    batch_id: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_required_user)
+):
+    """Owner 一键收口:审核 → 建块 → 写向量 → 发布;每步幂等,可重试。"""
+    return await patient_snapshot.finalize_batch(
+        batch_id=batch_id, current_uid=str(current_user.uid), db=db
+    )
+
+
+@clinical.get("/patients/{patient_id}/library")
+async def get_patient_library(
+    patient_id: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_required_user)
+):
+    """患者库聚合视图:文档→版本→修订(切块数)、快照代际、导入批次。"""
+    return await patient_service.get_patient_library_view(
+        patient_id=patient_id, current_uid=str(current_user.uid), db=db
+    )
+
+
+@clinical.get("/revisions/{revision_id}/chunks")
+async def get_revision_chunks(
+    revision_id: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_required_user)
+):
+    """查看一个解析修订的切块明细。"""
+    return await patient_service.get_revision_chunks_view(
         revision_id=revision_id, current_uid=str(current_user.uid), db=db
     )
 

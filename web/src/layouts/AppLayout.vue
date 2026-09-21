@@ -185,6 +185,13 @@ const mainList = computed(() => {
   })
 
   items.push({
+    name: '患者库',
+    path: '/patients',
+    icon: ClipboardList,
+    activeIcon: ClipboardList
+  })
+
+  items.push({
     name: '知识库 · 技能',
     path: '/extensions',
     activePaths: ['/extensions'],

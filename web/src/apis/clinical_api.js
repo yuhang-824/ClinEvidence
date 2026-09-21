@@ -17,3 +17,28 @@ export const clinicalApi = {
   confirmBatchAssignment: (batchId, method = 'manual') =>
     apiPost(`/api/clinical/import-batches/${batchId}/confirm-identity`, { method })
 }
+
+Object.assign(clinicalApi, {
+  getPatientLibrary: (patientId) => apiGet(`/api/clinical/patients/${patientId}/library`),
+
+  getRevisionChunks: (revisionId) => apiGet(`/api/clinical/revisions/${revisionId}/chunks`),
+
+  uploadRecordTmp: (threadId, file) => {
+    const form = new FormData()
+    form.append('file', file)
+    return apiPost(`/api/clinical/threads/${threadId}/records/tmp`, form)
+  },
+
+  confirmRecordUpload: (threadId, payload) =>
+    apiPost(`/api/clinical/threads/${threadId}/records/confirm`, payload),
+
+  approveRevision: (revisionId) => apiPost(`/api/clinical/revisions/${revisionId}/approve`, {}),
+
+  buildRevisionChunks: (revisionId) => apiPost(`/api/clinical/revisions/${revisionId}/chunks`, {}),
+
+  indexRevision: (revisionId) => apiPost(`/api/clinical/revisions/${revisionId}/index`, {}),
+
+  publishBatch: (batchId) => apiPost(`/api/clinical/import-batches/${batchId}/publish`, {}),
+
+  finalizeBatch: (batchId) => apiPost(`/api/clinical/import-batches/${batchId}/finalize`, {})
+})

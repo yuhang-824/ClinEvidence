@@ -6,6 +6,7 @@
 
 import hashlib
 import json
+import re
 import uuid
 
 from fastapi import HTTPException
@@ -44,21 +45,153 @@ async def approve_revision(*, revision_id: str, current_uid: str, db: AsyncSessi
     return {"id": revision.id, "status": revision.status}
 
 
+CHUNK_TARGET_CHARS = 800
+CHUNK_HARD_CHARS = 1600
+# 病历结构小标题:块按标题边界切分,保证每个小标题的内容完整(宁多切不切碎)
+_HEADING_KEYWORDS = (
+    "主诉",
+    "病例特点",
+    "现病史",
+    "既往史",
+    "个人史",
+    "月经史",
+    "婚育史",
+    "家族史",
+    "体格检查",
+    "妇科检查",
+    "专科检查",
+    "辅助检查",
+    "初步诊断",
+    "入院诊断",
+    "出院诊断",
+    "诊疗计划",
+    "诊疗经过",
+    "治疗经过",
+    "手术经过",
+    "手术记录",
+    "术后记录",
+    "病程记录",
+    "出院记录",
+    "出院医嘱",
+)
+_DATE_HEAD_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
+
+
+def _is_heading_line(line: str) -> bool:
+    """判断一行是否为病历结构小标题或病程条目时间头。"""
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if stripped.startswith("#"):
+        return True
+    if len(stripped) > 40:
+        return False
+    if _DATE_HEAD_RE.match(stripped):
+        return True
+    for keyword in _HEADING_KEYWORDS:
+        if keyword in stripped and not stripped.endswith(("。", ";", ";", ".", ",")):
+            return True
+    return False
+
+
+def _split_sections(text: str) -> list[dict]:
+    """把内容切成 section;每个 section = 标题行 + 其下属内容,保留原文区间。"""
+    sections: list[dict] = []
+    current: dict = {"heading": None, "heading_start": None, "lines": []}
+    cursor = 0
+    for line in text.split("\n"):
+        line_start = cursor
+        line_end = min(line_start + len(line) + 1, len(text))  # 行区间含行尾换行;末行止于文本末尾
+        cursor = line_start + len(line) + 1
+        if _is_heading_line(line):
+            if current["heading"] is not None or any(item[0].strip() for item in current["lines"]):
+                sections.append(current)
+            current = {"heading": line, "heading_start": line_start, "lines": []}
+        else:
+            current["lines"].append((line, line_start, line_end))
+    sections.append(current)
+    return sections
+
+
 def build_chunks_for_revision(content: str) -> list[dict]:
-    """确定性字符窗口分块;优先在换行处切分,保留字符区间供引用定位。"""
+    """结构感知分块:按病历小标题与病程时间头切 section,顺序组装成块。
+
+    规则:一个块可含多个小标题,但每个小标题的正文必须完整(跨块超长 section
+    按段落细分,且每个子块重复携带标题前缀);病程条目与其时间头绑定同块;
+    宁可多切,不允许块内出现无标题的孤立正文。
+    """
     text = content or ""
     chunks: list[dict] = []
-    start = 0
     index = 0
-    while start < len(text):
-        end = min(start + CHUNK_TARGET_CHARS, len(text))
-        if end < len(text):
-            newline = text.rfind("\n", start + CHUNK_TARGET_CHARS // 2, end)
-            if newline > start:
-                end = newline + 1
-        chunks.append({"index": index, "content": text[start:end], "char_start": start, "char_end": end})
-        index += 1
-        start = end
+    buffer: list[tuple[str, int, int]] = []
+    buffer_heading: str | None = None
+
+    def flush():
+        nonlocal buffer, buffer_heading, index
+        if not buffer:
+            return
+        content_text = "\n".join(item[0] for item in buffer).strip("\n")
+        if content_text.strip():
+            chunks.append(
+                {
+                    "index": index,
+                    "content": content_text,
+                    "char_start": buffer[0][1],
+                    "char_end": buffer[-1][2],
+                }
+            )
+            index += 1
+        buffer = []
+        buffer_heading = None
+
+    for section in _split_sections(text):
+        section_lines: list[tuple[str, int, int]] = []
+        if section["heading"] is not None:
+            heading_end = section["heading_start"] + len(section["heading"]) + 1
+            section_lines.append((section["heading"], section["heading_start"], heading_end))
+        section_lines.extend(section["lines"])
+        section_len = sum(len(item[0]) + 1 for item in section_lines)
+
+        if section_len > CHUNK_HARD_CHARS:
+            flush()
+            heading = (section["heading"] or "").strip()
+            paragraph: list[tuple[str, int, int]] = []
+            paragraph_len = 0
+            parts: list[list[tuple[str, int, int]]] = []
+            for item in section["lines"]:
+                paragraph.append(item)
+                paragraph_len += len(item[0]) + 1
+                if paragraph_len >= CHUNK_TARGET_CHARS and item[0].strip() == "":
+                    parts.append(paragraph)
+                    paragraph, paragraph_len = [], 0
+                elif paragraph_len >= CHUNK_HARD_CHARS:
+                    parts.append(paragraph)
+                    paragraph, paragraph_len = [], 0
+            if paragraph:
+                parts.append(paragraph)
+            for part in parts:
+                body = "\n".join(item[0] for item in part).strip("\n")
+                if not body.strip():
+                    continue
+                chunk_content = f"{heading}\n{body}" if heading else body
+                chunks.append(
+                    {
+                        "index": index,
+                        "content": chunk_content,
+                        "char_start": part[0][1],
+                        "char_end": part[-1][2],
+                    }
+                )
+                index += 1
+            continue
+
+        if buffer_len := sum(len(item[0]) + 1 for item in buffer):
+            if buffer_len + section_len > CHUNK_TARGET_CHARS:
+                flush()
+        buffer.extend(section_lines)
+        if sum(len(item[0]) + 1 for item in buffer) >= CHUNK_TARGET_CHARS:
+            flush()
+    flush()
     return chunks
 
 
@@ -290,3 +423,55 @@ async def index_revision_chunks(*, revision_id: str, current_uid: str, db: Async
         ]
     )
     return {"revision_id": revision.id, "vector_count": written}
+
+
+async def finalize_batch(*, batch_id: str, current_uid: str, db: AsyncSession) -> dict:
+    """Owner 一键收口:审核 → 建块 → 写向量 → 发布快照。
+
+    每一步幂等(已审核/已建块/已写入的跳过),整体可安全重试;
+    仅服务 review_required 状态的批次,最终事实由 publish_snapshot 原子收敛。
+    """
+    from fastapi import HTTPException as _HTTPException
+
+    import_repo = PatientImportRepository(db)
+    batch = await import_repo.lock_batch(str(batch_id))
+    if batch is None:
+        raise _HTTPException(status_code=404, detail="导入批次不存在")
+    patient = await PatientRepository(db).get_accessible(batch.patient_id, str(current_uid))
+    if patient is None:
+        raise _HTTPException(status_code=404, detail="导入批次不存在")
+    if patient.owner_uid != str(current_uid):
+        raise _HTTPException(status_code=403, detail="仅患者 Owner 可执行审核发布")
+    if batch.status != "review_required":
+        raise _HTTPException(status_code=409, detail=f"批次状态 {batch.status} 不可执行审核发布")
+
+    versions = (
+        await db.execute(
+            select(PatientDocumentVersion).where(PatientDocumentVersion.import_batch_id == batch.id)
+        )
+    ).scalars().all()
+    if not versions:
+        raise _HTTPException(status_code=409, detail="批次没有原件版本")
+
+    steps = []
+    for version in versions:
+        revisions = (
+            await db.execute(
+                select(PatientDocumentRevision).where(
+                    PatientDocumentRevision.document_version_id == version.id
+                )
+            )
+        ).scalars().all()
+        for revision in revisions:
+            if revision.status == "review_required":
+                await approve_revision(revision_id=revision.id, current_uid=current_uid, db=db)
+                steps.append(f"approved:{revision.id[:8]}")
+            built = await build_and_store_chunks(revision_id=revision.id, current_uid=current_uid, db=db)
+            if built["status"] == "built":
+                steps.append(f"chunks:{revision.id[:8]}:{built['chunk_count']}")
+            indexed = await index_revision_chunks(revision_id=revision.id, current_uid=current_uid, db=db)
+            if indexed.get("vector_count"):
+                steps.append(f"indexed:{revision.id[:8]}:{indexed['vector_count']}")
+
+    published = await publish_snapshot(batch_id=batch.id, current_uid=current_uid, db=db)
+    return {"batch": published, "steps": steps}

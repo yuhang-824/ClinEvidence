@@ -73,6 +73,19 @@ const router = createRouter({
       ]
     },
     {
+      path: '/patients',
+      name: 'patients',
+      component: AppLayout,
+      children: [
+        {
+          path: '',
+          name: 'PatientLibrary',
+          component: () => import('../views/PatientLibraryView.vue'),
+          meta: { requiresAuth: true }
+        }
+      ]
+    },
+    {
       path: '/dashboard',
       name: 'dashboard',
       component: AppLayout,

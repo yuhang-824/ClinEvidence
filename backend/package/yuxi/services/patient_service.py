@@ -7,6 +7,7 @@ patients 行的身份字段(owner_uid、identity_fingerprint)与绑定关系不�
 import secrets
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.repositories.patient_repository import PatientRepository, new_clinical_id
@@ -193,4 +194,200 @@ def _serialize_encounter(encounter: Encounter) -> dict:
         "ended_at": encounter.ended_at.isoformat() if encounter.ended_at else None,
         "status": encounter.status,
         "created_at": encounter.created_at.isoformat(),
+    }
+
+
+async def get_patient_library_view(*, patient_id: str, current_uid: str, db: AsyncSession) -> dict:
+    """患者库聚合视图:文档→版本→解析修订(含切块数)、快照代际、导入批次与时间线。
+
+    时间线以已发布快照为主线(每次导入发布新快照),版本与修订挂在文档树下;
+    只读,无任何状态变更。
+    """
+    from sqlalchemy import func
+
+    from yuxi.repositories.patient_import_repository import PatientImportRepository
+    from yuxi.storage.postgres.models_clinical import (
+        PatientChunk,
+        PatientDocument,
+        PatientDocumentRevision,
+        PatientDocumentVersion,
+        PatientImportBatch,
+        PatientSnapshot,
+        PatientSnapshotMember,
+    )
+
+    repo = PatientRepository(db)
+    patient = await repo.get_accessible_active(patient_id, str(current_uid))
+    if patient is None:
+        raise HTTPException(status_code=404, detail="患者不存在")
+
+    documents = (
+        await db.execute(
+            select(PatientDocument)
+            .where(PatientDocument.patient_id == patient.id)
+            .order_by(PatientDocument.created_at.asc())
+        )
+    ).scalars().all()
+    versions = (
+        await db.execute(
+            select(PatientDocumentVersion).where(PatientDocumentVersion.patient_id == patient.id)
+        )
+    ).scalars().all()
+    versions_by_doc: dict[str, list] = {}
+    for version in versions:
+        versions_by_doc.setdefault(version.document_id, []).append(version)
+    revision_ids = [version.id for version in versions]
+    revisions = (
+        await db.execute(
+            select(PatientDocumentRevision).where(PatientDocumentRevision.document_version_id.in_(revision_ids))
+            if revision_ids
+            else select(PatientDocumentRevision).where(False)
+        )
+    ).scalars().all()
+    revisions_by_version: dict[str, list] = {}
+    for revision in revisions:
+        revisions_by_version.setdefault(revision.document_version_id, []).append(revision)
+    chunk_counts = {
+        row[0]: row[1]
+        for row in (
+            await db.execute(
+                select(PatientChunk.document_version_id, func.count(PatientChunk.chunk_id))
+                .where(PatientChunk.document_version_id.in_(revision_ids))
+                .group_by(PatientChunk.document_version_id)
+                if revision_ids
+                else select(PatientChunk.document_version_id, func.count()).where(False).group_by(
+                    PatientChunk.document_version_id
+                )
+            )
+        ).all()
+    }
+
+    document_tree = []
+    for document in documents:
+        doc_versions = sorted(versions_by_doc.get(document.id, []), key=lambda v: v.version)
+        document_tree.append(
+            {
+                "id": document.id,
+                "logical_key": document.logical_key,
+                "document_type": document.document_type,
+                "status": document.status,
+                "visit_id": document.visit_id,
+                "event_started_at": document.event_started_at.isoformat()
+                if document.event_started_at
+                else None,
+                "versions": [
+                    {
+                        "id": version.id,
+                        "version": version.version,
+                        "status": version.status,
+                        "content_hash": version.content_hash[:12],
+                        "size": version.size,
+                        "uploaded_at": version.uploaded_at.isoformat(),
+                        "revisions": [
+                            {
+                                "id": revision.id,
+                                "revision_version": revision.version,
+                                "status": revision.status,
+                                "approved_at": revision.approved_at.isoformat() if revision.approved_at else None,
+                                "chunk_count": chunk_counts.get(version.id, 0) if revision.status == "approved" else 0,
+                            }
+                            for revision in sorted(
+                                revisions_by_version.get(version.id, []), key=lambda r: r.version
+                            )
+                        ],
+                    }
+                    for version in doc_versions
+                ],
+            }
+        )
+
+    snapshots = (
+        await db.execute(
+            select(PatientSnapshot)
+            .where(PatientSnapshot.patient_id == patient.id)
+            .order_by(PatientSnapshot.sequence.asc())
+        )
+    ).scalars().all()
+    snapshot_list = []
+    for snapshot in snapshots:
+        member_count = len(
+            (
+                await db.execute(
+                    select(PatientSnapshotMember).where(PatientSnapshotMember.snapshot_id == snapshot.id)
+                )
+            ).scalars().all()
+        )
+        snapshot_list.append(
+            {
+                "id": snapshot.id,
+                "sequence": snapshot.sequence,
+                "status": snapshot.status,
+                "member_count": member_count,
+                "manifest_hash": snapshot.manifest_hash[:12],
+                "published_at": snapshot.published_at.isoformat() if snapshot.published_at else None,
+                "created_by_batch_id": snapshot.created_by_batch_id,
+                "is_current": patient.current_snapshot_id == snapshot.id,
+            }
+        )
+
+    batches = (
+        await db.execute(
+            select(PatientImportBatch)
+            .where(PatientImportBatch.patient_id == patient.id)
+            .order_by(PatientImportBatch.created_at.desc())
+        )
+    ).scalars().all()
+
+    return {
+        "patient": patient.to_dict(),
+        "documents": document_tree,
+        "snapshots": snapshot_list,
+        "batches": [PatientImportRepository.serialize_batch(batch) for batch in batches],
+        "timeline_note": "时间线按快照 sequence 演进;同一逻辑文档的新版本在发布后进入当前快照,旧版本保留在历史快照",
+    }
+
+
+async def get_revision_chunks_view(*, revision_id: str, current_uid: str, db: AsyncSession) -> dict:
+    """查看一个解析修订的切块:内容、字符区间与页码。"""
+    from yuxi.storage.postgres.models_clinical import PatientChunk, PatientDocumentRevision, PatientDocumentVersion
+
+    revision = await db.scalar(select(PatientDocumentRevision).where(PatientDocumentRevision.id == revision_id))
+    if revision is None:
+        raise HTTPException(status_code=404, detail="解析修订不存在")
+    version = await db.get(PatientDocumentVersion, revision.document_version_id)
+    patient = await db.get(Patient, version.patient_id)
+    if patient is None or not (
+        patient.owner_uid == str(current_uid)
+        or await PatientRepository(db).get_accessible(patient.id, str(current_uid))
+    ):
+        raise HTTPException(status_code=404, detail="解析修订不存在")
+    chunks = (
+        await db.execute(
+            select(PatientChunk)
+            .where(
+                PatientChunk.document_version_id == version.id,
+                PatientChunk.revision_version == revision.version,
+            )
+            .order_by(PatientChunk.chunk_index)
+        )
+    ).scalars().all()
+    return {
+        "revision": {
+            "id": revision.id,
+            "document_version_id": version.id,
+            "revision_version": revision.version,
+            "status": revision.status,
+        },
+        "document_type": None,
+        "chunks": [
+            {
+                "chunk_id": chunk.chunk_id,
+                "chunk_index": chunk.chunk_index,
+                "content": chunk.content,
+                "char_start": chunk.char_start,
+                "char_end": chunk.char_end,
+                "page_number": chunk.page_number,
+            }
+            for chunk in chunks
+        ],
     }

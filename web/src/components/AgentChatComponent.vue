@@ -276,6 +276,15 @@
                       />
                     </template>
                     <template #actions-left-extra>
+                      <button
+                        v-if="requiresPatient"
+                        type="button"
+                        class="direct-steer-button"
+                        title="上传病例到当前患者的病例库,经审核后发布新快照"
+                        @click="openRecordUpload"
+                      >
+                        上传病例
+                      </button>
                       <ToolApprovalModeSelector
                         upward
                         :model-value="currentToolApprovalMode"
@@ -832,6 +841,13 @@
     @select="onClinicalPatientSelected"
     @close="onClinicalPatientModalClosed"
   />
+  <RecordUploadModal
+    :visible="recordUploadVisible"
+    :thread-id="currentChatId || ''"
+    :patient-id="chatThreadsStore.currentThread?.patient?.id || ''"
+    :display-code="chatThreadsStore.currentThread?.patient?.display_code || ''"
+    @close="recordUploadVisible = false"
+  />
 </template>
 
 <script setup>
@@ -927,6 +943,7 @@ import { AUTO_PROJECT_ID } from '@/utils/projectSelection'
 import { createSingleFlight } from '@/utils/singleFlight'
 import { createThreadForContext } from '@/utils/threadCreation'
 import PatientSelectModal from '@/components/PatientSelectModal.vue'
+import RecordUploadModal from '@/components/RecordUploadModal.vue'
 import {
   FILE_TREE_SECTION,
   MESSAGE_DEBUG_SECTION,
@@ -1406,6 +1423,16 @@ const onClinicalPatientModalClosed = () => {
     patientSelectionResolve(false)
     patientSelectionResolve = null
   }
+}
+
+// 病历入库上传:仅诊疗会话提供;病例走患者库管线,与聊天附件分开
+const recordUploadVisible = ref(false)
+const openRecordUpload = async () => {
+  if (!currentChatId.value) {
+    const threadId = await createActiveThread()
+    if (!threadId) return
+  }
+  recordUploadVisible.value = true
 }
 const currentChatId = computed(() => currentThreadId.value)
 

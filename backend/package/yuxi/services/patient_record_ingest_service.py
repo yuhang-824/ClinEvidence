@@ -79,6 +79,7 @@ async def create_thread_upload_batch(
     files: list[dict],
     document_type: str,
     visit_id: str | None = None,
+    event_started_at=None,
     logical_key_prefix: str | None = None,
     idempotency_key: str | None = None,
     db: AsyncSession,
@@ -98,6 +99,7 @@ async def create_thread_upload_batch(
         files=files,
         document_type=document_type,
         visit_id=visit_id,
+        event_started_at=event_started_at,
         logical_key_prefix=logical_key_prefix,
         idempotency_key=idempotency_key,
         db=db,
@@ -146,6 +148,7 @@ async def _create_batch(
     logical_key_prefix: str | None,
     idempotency_key: str | None,
     db: AsyncSession,
+    event_started_at=None,
     dataset_key: str | None = None,
     manifest_hash: str | None = None,
 ) -> dict:
@@ -193,6 +196,7 @@ async def _create_batch(
                 data=item["data"],
                 document_type=document_type,
                 logical_key_prefix=logical_key_prefix,
+                event_started_at=event_started_at,
             )
         )
     await import_repo.transition_batch(batch, "identity_check")
@@ -217,6 +221,7 @@ async def _store_original(
     data: bytes,
     document_type: str,
     logical_key_prefix: str | None,
+    event_started_at=None,
 ) -> str:
     """保存不可变原件并建立逻辑文档与版本;同患者同内容幂等返回已有版本。"""
     content_hash = _content_hash(data)
@@ -238,6 +243,9 @@ async def _store_original(
         logical_key=logical_key,
         visit_id=batch.visit_id,
     )
+    if event_started_at is not None and document.event_started_at is None:
+        document.event_started_at = event_started_at
+        await import_repo.db.flush()
     version_number = await import_repo.next_document_version_number(document.id)
     version = await import_repo.add_document_version(
         PatientDocumentVersion(
@@ -496,6 +504,7 @@ async def confirm_record_upload_view(
     tmp_file_ids: list[str],
     document_type: str,
     visit_id: str | None,
+    event_started_at=None,
     idempotency_key: str | None,
     db: AsyncSession,
 ) -> dict:
@@ -524,6 +533,7 @@ async def confirm_record_upload_view(
         files=files,
         document_type=document_type.strip(),
         visit_id=visit_id,
+        event_started_at=event_started_at,
         idempotency_key=idempotency_key,
         db=db,
     )

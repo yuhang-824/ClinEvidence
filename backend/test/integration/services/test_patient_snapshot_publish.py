@@ -146,6 +146,20 @@ def test_chunking_is_deterministic_and_covers_all_text():
         assert current["char_start"] == previous["char_end"]
 
 
+def test_chunking_keeps_section_titles_complete():
+    """小标题正文跨块时,每个子块必须重复携带标题;病程时间头与内容绑定同块。"""
+    body = "\n".join(f"{i}.患女某岁,既往记录条目内容详述第{i}条。" for i in range(1, 120))
+    text = "## 病例特点:\n" + body + "\n## 病程记录\n2025-02-2516:10首次病程记录\n体温正常,术区敷料干燥。"
+
+    chunks = build_chunks_for_revision(text)
+    assert len(chunks) > 1
+    body_chunks = [c for c in chunks if "既往记录条目内容详述" in c["content"]]
+    assert body_chunks, "病例特点正文丢失"
+    assert all(c["content"].startswith("## 病例特点") for c in body_chunks)
+    course = [c for c in chunks if "首次病程记录" in c["content"]]
+    assert len(course) == 1 and "体温正常" in course[0]["content"]
+
+
 async def test_publish_requires_approved_revision_and_chunks(clinical_db):
     await _seed_owner(clinical_db)
     await _seed_patient_with_batch(clinical_db)
