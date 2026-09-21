@@ -79,7 +79,21 @@ class ReadEvidenceInput(BaseModel):
     args_schema=ReadPatientContextInput,
 )
 async def read_patient_context(dummy: str, runtime: ToolRuntime = None) -> str:
-    """返回当前会话患者的脱敏摘要、就诊列表与本次快照信息。"""
+    """获取当前会话绑定的患者上下文。
+
+    适用场景:
+    1. 回答任何患者相关问题前,先获取患者概况与可用资料范围
+    2. 医生询问"这位患者的基本情况""现在有哪些资料"
+    3. 需要确认本次回答所依据的快照时点
+
+    返回结果:
+    patient 为脱敏摘要(编号/状态/当前快照),encounters 为就诊列表;
+    患者尚无已发布快照时会明确提示,此时病历检索不可用。
+
+    使用规范:
+    1. 无参数;作用域由服务端从当前会话解析,不接受患者标识
+    2. 每次会话首轮建议调用一次,后续仅在怀疑资料变化时重查
+    """
     from yuxi.services.clinical_retrieval_service import get_patient_context_view
 
     return _dumps(await _run_with_pg_session(get_patient_context_view, runtime))
@@ -97,7 +111,24 @@ async def search_patient_records(
     document_types: list[str] | None = None,
     runtime: ToolRuntime = None,
 ) -> str:
-    """在当前患者已发布快照内检索病历文块;仅限当前患者,不可检索他人资料。"""
+    """在当前患者的已发布病历快照内做语义检索。
+
+    适用场景:
+    1. 查找患者的诊断、检查、病理、治疗经过等具体事实
+    2. 需要为回答提供患者原文证据(返回 chunk_id 供引用与回读)
+    3. 按文书类型缩小范围,如只看病理报告
+
+    返回结果:
+    命中文块列表,含 content(原文内容)、document_type(文书类型)、
+    page_number(页码)、chunk_id(证据 ID,可用于 read_evidence_excerpt 回读)、
+    snapshot_id(证据所属快照)。
+
+    使用规范:
+    1. 只能检索当前会话患者;问题中出现其他患者编号不会改变作用域
+    2. 检索词用临床术语,避免整句疑问
+    3. 结果为空时如实说明未找到,不要编造患者事实
+    4. 通用医学知识请改用 query_kb,不要用本工具检索指南原文
+    """
     from yuxi.services.clinical_retrieval_service import search_patient_records_view
 
     async def _impl(db, *, thread_id: str, uid: str) -> Any:
@@ -115,41 +146,26 @@ async def search_patient_records(
 
 @tool(
     category="clinical",
-    tags=["知识"],
-    display_name="医学知识检索",
-    args_schema=SearchMedicalKnowledgeInput,
-)
-async def search_medical_knowledge(
-    kb_id: str, query_text: str, file_name: str | None = None, runtime: ToolRuntime = None
-) -> Any:
-    """在授权的医学知识库中检索指南与共识;知识证据与患者事实分别标注。"""
-    from yuxi.agents.toolkits.kbs.tools import (
-        _find_query_target,
-        _get_knowledge_base,
-        _resolve_visible_knowledge_bases_for_query,
-    )
-
-    if not kb_id or not query_text:
-        return "请提供 kb_id 与查询内容"
-    visible_kbs = await _resolve_visible_knowledge_bases_for_query(runtime)
-    target_kb_id, target_error = _find_query_target(kb_id=kb_id, visible_kbs=visible_kbs)
-    if target_error:
-        return target_error
-    try:
-        kwargs = {"file_name": file_name} if file_name else {}
-        return await _get_knowledge_base().retrieve(target_kb_id, query_text, **kwargs)
-    except Exception as exc:
-        return f"检索失败: {exc}"
-
-
-@tool(
-    category="clinical",
     tags=["患者"],
     display_name="证据原文回读",
     args_schema=ReadEvidenceInput,
 )
 async def read_evidence_excerpt(chunk_id: str, runtime: ToolRuntime = None) -> str:
-    """按证据 ID 回读患者原文窗口;服务端校验证据属于当前 Run 快照。"""
+    """按证据 ID 回读患者病历原文窗口。
+
+    适用场景:
+    1. 多轮对话中上下文被压缩后,重新载入关键患者证据原文
+    2. 回答前核对某个引用对应的原文内容,避免引用漂移
+    3. 检索结果中某个 chunk 的内容片段不足以判断时查看完整文块
+
+    返回结果:
+    证据文块的完整原文、所属文书类型、页码、字符区间与快照归属;
+    证据不属于当前患者快照时返回 404,不会返回其他患者内容。
+
+    使用规范:
+    1. chunk_id 必须来自 search_patient_records 的返回或已保存的引用
+    2. 不要虚构 chunk_id;伪造 ID 会被拒绝并应向医生说明
+    """
     from yuxi.services.clinical_retrieval_service import read_patient_evidence_view
 
     async def _impl(db, *, thread_id: str, uid: str) -> Any:
@@ -159,5 +175,5 @@ async def read_evidence_excerpt(chunk_id: str, runtime: ToolRuntime = None) -> s
 
 
 def get_clinical_tools() -> list:
-    """返回诊疗 Agent 首期注册的四个只读工具。"""
-    return [read_patient_context, search_patient_records, search_medical_knowledge, read_evidence_excerpt]
+    """返回诊疗 Agent 的患者域只读工具;医学知识检索复用原生 query_kb,不重复提供。"""
+    return [read_patient_context, search_patient_records, read_evidence_excerpt]
