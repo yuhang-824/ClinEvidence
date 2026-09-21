@@ -911,6 +911,88 @@ def _validate_router_boundaries(root: Path, errors: list[str]) -> int:
     return checked
 
 
+def _quoted_strings(text: str, pattern: str) -> list[str]:
+    """按给定正则取出其中的引号字符串，用于比对跨端常量。"""
+
+    match = re.search(pattern, text, re.DOTALL)
+    if match is None:
+        return []
+    return re.findall(r"['\"]([^'\"]+)['\"]", match.group(1))
+
+
+def _validate_review_contract_constants(root: Path, errors: list[str]) -> int:
+    """审核契约常量在两个真实 Owner 处必须一致：规则由后端放行，界面按同一契约呈现。
+
+    前端镜像了后端规则 id 与占位正文前缀；两侧各改一处就会静默漂移（界面显示"无异常"
+    而后端仍在拦，或反之），因此在这里比对，而不是复制一份恒真的常量清单。
+
+    这是防漂移守卫，解析不出来就等于没守：两侧只要有一侧存在就必须两侧都在、都解析得出，
+    否则报错而不是静默通过。规则 id 按后端常量名逐个取值，新增规则不改这里也能被发现。
+    两侧都不存在时不报错——该契约整体不在这棵树里（最小仓库 fixture），没有东西可漂移。
+
+    读的是文件里的文本形态（取第一处赋值），不是运行中的值：注释里写出与赋值同形的文本
+    会被当成定义。要改这些常量请改真实定义，不要在注释里贴一份副本。
+    """
+
+    backend_path = root / "backend/package/yuxi/knowledge/structure.py"
+    frontend_path = root / "web/src/components/knowledge/StructuredDocumentReview.vue"
+    backend_label = "backend/package/yuxi/knowledge/structure.py"
+    frontend_label = "web/src/components/knowledge/StructuredDocumentReview.vue"
+    present = [p for p in (backend_path, frontend_path) if p.is_file()]
+    if not present:
+        return 0
+    if len(present) == 1:
+        missing = frontend_label if present[0] is backend_path else backend_label
+        errors.append(f"审核契约常量无法比对：缺少 {missing}（另一侧仍镜像该契约）")
+        return 0
+    backend = backend_path.read_text(encoding="utf-8")
+    frontend = frontend_path.read_text(encoding="utf-8")
+
+    # 后端按常量名取 id（双引号或单引号都可），前端按 AUTO_REVIEW_LABELS 的键取 id；
+    # 只扫该对象字面量，避免文件里其它 'xxx/v1': 键造成误报。
+    backend_rules = dict(
+        re.findall(r"(AUTO_REVIEW_RULE_\w+)\s*=\s*['\"]([^'\"]+)['\"]", backend)
+    )
+    labels_block = re.search(
+        r"AUTO_REVIEW_LABELS\s*=\s*\{(.*?)\n\s*\}", frontend, re.DOTALL
+    )
+    frontend_rules = re.findall(
+        r"['\"]([^'\"]+)['\"]\s*:", labels_block.group(1) if labels_block else ""
+    )
+    if not backend_rules or not frontend_rules:
+        errors.append(
+            "审核契约常量无法比对："
+            f"后端解析到 {len(backend_rules)} 个规则 id（{backend_label}），"
+            f"前端解析到 {len(frontend_rules)} 个（{frontend_label} 的 AUTO_REVIEW_LABELS）"
+        )
+    elif sorted(backend_rules.values()) != sorted(frontend_rules):
+        errors.append(
+            "审核规则 id 前后端不一致："
+            f"后端 {sorted(backend_rules.values())} / 前端 {sorted(frontend_rules)}"
+            "（契约 Owner 是 backend/package/yuxi/knowledge/structure.py）"
+        )
+
+    # 占位前缀允许 Object.freeze([...]) 之类的包装；逐字列表相等，换序也算漂移。
+    # 前缀定义必须写成方括号字面量：元组/列表以外的写法解析不到，会以"无法比对"报错。
+    backend_prefixes = _quoted_strings(
+        backend, r"PLACEHOLDER_PREFIXES\s*=\s*\(([^)]*)\)"
+    )
+    frontend_prefixes = _quoted_strings(
+        frontend, r"PLACEHOLDER_PREFIXES\s*=\s*(?:Object\.freeze\()?\s*\[([^]]*)\]"
+    )
+    if not backend_prefixes or not frontend_prefixes:
+        errors.append(
+            "占位正文前缀无法比对："
+            f"后端解析到 {len(backend_prefixes)} 个，前端解析到 {len(frontend_prefixes)} 个"
+        )
+    elif backend_prefixes != frontend_prefixes:
+        errors.append(
+            "占位正文前缀前后端不一致："
+            f"后端 {backend_prefixes} / 前端 {frontend_prefixes}"
+        )
+    return len(backend_rules) + len(backend_prefixes)
+
+
 def _validate_web_api_boundary(root: Path, errors: list[str]) -> int:
     source_root = root / "web/src"
     checked = 0
@@ -1001,6 +1083,7 @@ def verify(root: Path) -> tuple[list[str], dict[str, Any]]:
     document_files = _validate_document_prose(resolved_root, errors)
     router_files = _validate_router_boundaries(resolved_root, errors)
     web_files = _validate_web_api_boundary(resolved_root, errors)
+    review_contract_constants = _validate_review_contract_constants(resolved_root, errors)
     workspace_boundary_files = _validate_workspace_host_path_boundary(
         resolved_root, errors
     )
@@ -1016,6 +1099,7 @@ def verify(root: Path) -> tuple[list[str], dict[str, Any]]:
             "router_files_checked": router_files,
             "web_source_files_checked": web_files,
             "workspace_boundary_files_checked": workspace_boundary_files,
+            "review_contract_constants_checked": review_contract_constants,
         },
     }
     return errors, projection
@@ -1047,7 +1131,8 @@ def main() -> int:
             f"{len(projection['agents_files'])} agents files / "
             f"{projection['boundaries']['document_files_checked']} docs / "
             f"{projection['boundaries']['router_files_checked']} routers / "
-            f"{projection['boundaries']['web_source_files_checked']} web sources"
+            f"{projection['boundaries']['web_source_files_checked']} web sources / "
+            f"{projection['boundaries']['review_contract_constants_checked']} review contract constants"
         )
     return 0
 

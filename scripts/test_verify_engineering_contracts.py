@@ -215,6 +215,48 @@ jobs:
             any("禁止手工中央主张清单" in error for error in self._errors())
         )
 
+    def test_review_rule_id_drift_is_rejected(self) -> None:
+        """前端镜像的审核规则 id 与后端契约不一致时必须失败。"""
+
+        self._write(
+            "backend/package/yuxi/knowledge/structure.py",
+            'AUTO_REVIEW_RULE_BLANK = "blank-page/v2"\n'
+            'AUTO_REVIEW_RULE_CLEAN = "no-anomaly/v1"\n'
+            'PLACEHOLDER_PREFIXES = ("[空结构块", "[表格", "[图示")\n',
+        )
+        self._write(
+            "web/src/components/knowledge/StructuredDocumentReview.vue",
+            "const PLACEHOLDER_PREFIXES = ['[空结构块', '[表格', '[图示']\n"
+            "const AUTO_REVIEW_LABELS = {\n"
+            "  'blank-page/v1': '空白页',\n"
+            "  'no-anomaly/v1': '无异常'\n"
+            "}\n",
+        )
+
+        errors = self._errors()
+        self.assertTrue(any("审核规则 id 前后端不一致" in error for error in errors), errors)
+
+    def test_placeholder_prefix_drift_is_rejected(self) -> None:
+        """占位正文前缀前后端不一致时必须失败。"""
+
+        self._write(
+            "backend/package/yuxi/knowledge/structure.py",
+            'AUTO_REVIEW_RULE_BLANK = "blank-page/v1"\n'
+            'AUTO_REVIEW_RULE_CLEAN = "no-anomaly/v1"\n'
+            'PLACEHOLDER_PREFIXES = ("[空结构块", "[表格")\n',
+        )
+        self._write(
+            "web/src/components/knowledge/StructuredDocumentReview.vue",
+            "const PLACEHOLDER_PREFIXES = ['[空结构块', '[表格', '[图示']\n"
+            "const AUTO_REVIEW_LABELS = {\n"
+            "  'blank-page/v1': '空白页',\n"
+            "  'no-anomaly/v1': '无异常'\n"
+            "}\n",
+        )
+
+        errors = self._errors()
+        self.assertTrue(any("占位正文前缀前后端不一致" in error for error in errors), errors)
+
     def test_decision_missing_heading_is_rejected(self) -> None:
         path = (
             self.root
@@ -1077,6 +1119,89 @@ Owner：owner.md
                 ".github/workflows/real-provider-probe.yml",
             },
         )
+
+
+    def _write_backend_contract(self, rules: str, prefixes: str) -> None:
+        self._write(
+            "backend/package/yuxi/knowledge/structure.py",
+            rules + "PLACEHOLDER_PREFIXES = (" + prefixes + ")\n",
+        )
+
+    def _write_frontend_contract(self, labels: str, prefixes: str) -> None:
+        self._write(
+            "web/src/components/knowledge/StructuredDocumentReview.vue",
+            "const PLACEHOLDER_PREFIXES = " + prefixes + "\n"
+            "const AUTO_REVIEW_LABELS = {\n" + labels + "}\n",
+        )
+
+    def _write_consistent_contract(self, *, backend_rules=None, frontend_labels=None) -> None:
+        self._write_backend_contract(
+            backend_rules
+            or 'AUTO_REVIEW_RULE_BLANK = "blank-page/v1"\nAUTO_REVIEW_RULE_CLEAN = "no-anomaly/v1"\n',
+            '"[空结构块", "[表格"',
+        )
+        self._write_frontend_contract(
+            frontend_labels or "  'blank-page/v1': '空白页',\n  'no-anomaly/v1': '无异常'\n",
+            "['[空结构块', '[表格']",
+        )
+
+    def test_new_backend_rule_without_frontend_label_is_rejected(self) -> None:
+        """后端新增规则 id 而前端没有镜像时必须失败（只认固定常量名的解析会漏过）。"""
+
+        self._write_consistent_contract(
+            backend_rules='AUTO_REVIEW_RULE_BLANK = "blank-page/v1"\n'
+            'AUTO_REVIEW_RULE_CLEAN = "no-anomaly/v1"\n'
+            'AUTO_REVIEW_RULE_SCANNED = "scanned-page/v1"\n'
+        )
+
+        errors = self._errors()
+        self.assertTrue(any("审核规则 id 前后端不一致" in error for error in errors), errors)
+
+    def test_frontend_double_quoted_labels_are_still_compared(self) -> None:
+        """前端 label 键用双引号不能被当成解析不到而静默跳过。"""
+
+        self._write_consistent_contract(
+            backend_rules='AUTO_REVIEW_RULE_BLANK = "blank-page/v2"\n'
+            'AUTO_REVIEW_RULE_CLEAN = "no-anomaly/v1"\n',
+            frontend_labels='  "blank-page/v1": "空白页",\n  "no-anomaly/v1": "无异常"\n',
+        )
+
+        errors = self._errors()
+        self.assertTrue(any("审核规则 id 前后端不一致" in error for error in errors), errors)
+
+    def test_frozen_frontend_prefixes_are_still_compared(self) -> None:
+        """前端把前缀数组包在 Object.freeze 里仍须比对。"""
+
+        self._write_consistent_contract()
+        self._write_frontend_contract(
+            "  'blank-page/v1': '空白页',\n  'no-anomaly/v1': '无异常'\n",
+            "Object.freeze(['[空结构块'])",
+        )
+
+        errors = self._errors()
+        self.assertTrue(any("占位正文前缀前后端不一致" in error for error in errors), errors)
+
+    def test_half_present_contract_is_rejected(self) -> None:
+        """契约只剩前端镜像时必须失败，而不是静默跳过。"""
+
+        self._write_frontend_contract(
+            "  'blank-page/v1': '空白页',\n  'no-anomaly/v1': '无异常'\n",
+            "['[空结构块', '[表格']",
+        )
+
+        errors = self._errors()
+        self.assertTrue(any("审核契约常量无法比对" in error for error in errors), errors)
+
+    def test_unparsable_contract_is_rejected(self) -> None:
+        """两侧都在但常量被改名时必须失败，不能因为解析为空就通过。"""
+
+        self._write_consistent_contract()
+        self._write_backend_contract(
+            'AUTO_REVIEW_RULES_BLANK = "blank-page/v1"\n', '"[空结构块", "[表格"'
+        )
+
+        errors = self._errors()
+        self.assertTrue(any("审核契约常量无法比对" in error for error in errors), errors)
 
 
 if __name__ == "__main__":
