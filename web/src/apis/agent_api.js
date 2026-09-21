@@ -306,13 +306,14 @@ export const threadApi = {
    * @param {Object} metadata - 元数据
    * @returns {Promise} - 创建结果
    */
-  createThread: (agentId, title, metadata, { requestId, projectId } = {}) =>
+  createThread: (agentId, title, metadata, { requestId, projectId, patientId } = {}) =>
     apiPost('/api/chat/thread', {
       request_id: requestId,
       agent_id: agentId,
       title: title || '新的对话',
       metadata: metadata || {},
-      ...(projectId ? { project_id: projectId } : {})
+      ...(projectId ? { project_id: projectId } : {}),
+      ...(patientId ? { patient_id: patientId } : {})
     }),
 
   /**

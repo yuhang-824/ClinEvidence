@@ -827,6 +827,11 @@
       </div>
     </div>
   </div>
+  <PatientSelectModal
+    :visible="patientModalVisible"
+    @select="onClinicalPatientSelected"
+    @close="onClinicalPatientModalClosed"
+  />
 </template>
 
 <script setup>
@@ -921,6 +926,7 @@ import {
 import { AUTO_PROJECT_ID } from '@/utils/projectSelection'
 import { createSingleFlight } from '@/utils/singleFlight'
 import { createThreadForContext } from '@/utils/threadCreation'
+import PatientSelectModal from '@/components/PatientSelectModal.vue'
 import {
   FILE_TREE_SECTION,
   MESSAGE_DEBUG_SECTION,
@@ -1365,6 +1371,38 @@ const currentAgent = computed(() => {
   if (!currentAgentId.value || !agents.value || !agents.value.length) return null
   return agents.value.find((a) => a.id === currentAgentId.value) || null
 })
+
+// 诊疗 Agent 要求会话在创建时绑定患者;选择结果仅用于本次创建请求。
+const requiresPatient = computed(() => currentAgent.value?.config_json?.requires_patient === true)
+const clinicalPatientId = ref('')
+const patientModalVisible = ref(false)
+let patientSelectionResolve = null
+
+const resolveClinicalPatient = () => {
+  if (!requiresPatient.value) return Promise.resolve(true)
+  if (clinicalPatientId.value) return Promise.resolve(true)
+  patientModalVisible.value = true
+  return new Promise((resolve) => {
+    patientSelectionResolve = resolve
+  })
+}
+
+const onClinicalPatientSelected = (patient) => {
+  clinicalPatientId.value = patient?.id || ''
+  patientModalVisible.value = false
+  if (patientSelectionResolve) {
+    patientSelectionResolve(Boolean(clinicalPatientId.value))
+    patientSelectionResolve = null
+  }
+}
+
+const onClinicalPatientModalClosed = () => {
+  patientModalVisible.value = false
+  if (patientSelectionResolve) {
+    patientSelectionResolve(false)
+    patientSelectionResolve = null
+  }
+}
 const currentChatId = computed(() => currentThreadId.value)
 
 watch(
@@ -2830,7 +2868,8 @@ const createThread = async (agentId, title = '新的对话', projectId = '', req
       { tool_approval_mode: currentToolApprovalMode.value },
       {
         requestId,
-        projectId: projectId || undefined
+        projectId: projectId || undefined,
+        patientId: clinicalPatientId.value || undefined
       }
     )
     if (thread) {
@@ -2939,6 +2978,8 @@ const fetchAgentState = async (agentId, threadId, { required = false } = {}) => 
 
 const createActiveThread = async (title = '新的对话') => {
   if (currentChatId.value) return currentChatId.value
+  const patientAllowed = await resolveClinicalPatient()
+  if (!patientAllowed) return null
   const selectedAgent = currentAgentId.value
   const selectedProject = selectedProjectId.value
   const startingThreadId = currentChatId.value
