@@ -13,8 +13,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from yuxi.models.providers.builtin import LOCAL_PROVIDER_IDS, RETIRED_CHAT_PROVIDER_IDS
 from yuxi.storage.redis import sync_redis_client
-from yuxi.models.providers.builtin import RETIRED_CHAT_PROVIDER_IDS, LOCAL_PROVIDER_IDS
 from yuxi.utils.logging_config import logger
 
 REDIS_CACHE_KEY = "yuxi:model_cache"

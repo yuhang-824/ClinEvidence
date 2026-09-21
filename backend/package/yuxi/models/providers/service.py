@@ -13,8 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from yuxi.models.providers.builtin import (
     BUILTIN_PROVIDERS,
     LOCAL_PROVIDER_IDS,
-    RETIRED_PROVIDER_IDS,
     RETIRED_CHAT_PROVIDER_IDS,
+    RETIRED_PROVIDER_IDS,
 )
 from yuxi.models.providers.repository import (
     create_model_provider,

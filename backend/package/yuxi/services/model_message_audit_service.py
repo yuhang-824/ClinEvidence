@@ -8,7 +8,6 @@ from time import monotonic
 from typing import Any
 
 from langchain_core.callbacks import AsyncCallbackHandler
-
 from yuxi.models.request_audit import model_request_recorder
 from yuxi.repositories.model_message_audit_repository import ModelMessageAuditRepository
 from yuxi.storage.postgres.manager import pg_manager

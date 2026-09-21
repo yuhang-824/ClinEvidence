@@ -15,8 +15,8 @@ from pydantic import HttpUrl, TypeAdapter
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from yuxi.storage.postgres.models_business import ConfigOption
 from yuxi.models.providers.builtin import RETIRED_CHAT_PROVIDER_IDS
+from yuxi.storage.postgres.models_business import ConfigOption
 from yuxi.storage.redis import get_async_redis_client
 from yuxi.utils.logging_config import logger
 

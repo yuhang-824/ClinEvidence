@@ -3,8 +3,8 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from yuxi.storage.postgres.models_business import ModelProvider
 from yuxi.models.providers.builtin import RETIRED_PROVIDER_IDS
+from yuxi.storage.postgres.models_business import ModelProvider
 
 
 async def list_model_providers(db: AsyncSession, *, include_retired: bool = False) -> list[ModelProvider]:

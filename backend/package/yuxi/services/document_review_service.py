@@ -45,7 +45,7 @@ async def read_review(kb_id, file_id):
 
 
 async def change_review(
-    kb_id, file_id, *, action, version, operator, content=None, boundaries=None, structure=None, base_saved_at=None,
+    kb_id, file_id, *, action, version, operator, content=None, boundaries=None, structure=None, base_saved_at=None
 ):
     """保留旧解析原文并按版本条件执行管理操作。"""
     repo = DocumentReviewRepository()

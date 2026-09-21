@@ -48,4 +48,4 @@ Docling 对中文期刊版式的高频误判（页眉/页脚与正文句子判�
 - 自托管 `mineru_ocr` 引擎的 PDF 结构化路径未接（其 `mineru.py` 仅返回 markdown），离线场景暂用 Docling；需要时按同一适配层接入。
 - 表格 HTML 的顺序对齐在异常版式（跨页表、分栏嵌套）可能失配并降级占位，靠结构审核人工补齐。
 - 后端全量回归 `test/unit -m "not slow"` 含已知的 `test_run_worker.py` 本机卡点（见 2026-09-19 决策记录）：本次在知识库/仓储/路由/相关服务范围内运行，`test_run_worker.py` 未包含；该文件单独运行通过（50 项 15 秒，见 2026-09-19 记录）。
-- 本次未修复仓库既有的后端 lint 漂移（与本次改动无关，已在 main 上存在）：`ruff format --check` 对 `knowledge/implementations/milvus.py`、`services/chat_service.py` 报需重排，`ruff check --select I` 报 11 处导入顺序（含 `config/options.py`，其 HEAD 版本同样报错）。按"不顺手格式化"约定不在本变更内处理，需单独清理后 CI 的 ruff 门禁才会整体变绿。
+- 仓库既有的后端 lint 漂移已在后续变更中清理（CI 的 ruff 作业只检查 `package`，此前在 main 上是红的）：`ruff check package` 的 1 处 E501（`knowledge/implementations/milvus.py`）、`ruff format package --check` 的 3 个文件（`milvus.py`、`services/chat_service.py`、`services/document_review_service.py`）与 `ruff check --select I package` 的 11 处导入顺序全部修好，三条门禁现已通过。`test/` 与 `server/` 下另有 23 个文件会被 `ruff format --check` 重排、24 条 lint 报错，不在 CI 范围内（其 ruff 命令也只覆盖 `package`），未处理。
