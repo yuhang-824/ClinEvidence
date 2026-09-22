@@ -250,6 +250,16 @@ async def finalize_import_batch(
     )
 
 
+@clinical.delete("/patients/{patient_id}")
+async def delete_patient(
+    patient_id: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_required_user)
+):
+    """删除患者:软删患者行并清理病例数据与向量;仅 Owner。"""
+    return await patient_service.delete_patient_view(
+        patient_id=patient_id, current_uid=str(current_user.uid), db=db
+    )
+
+
 @clinical.get("/patients/{patient_id}/library")
 async def get_patient_library(
     patient_id: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_required_user)

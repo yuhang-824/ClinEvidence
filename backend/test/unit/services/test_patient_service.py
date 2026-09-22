@@ -14,6 +14,7 @@ from yuxi.repositories.patient_repository import PatientRepository
 from yuxi.services.conversation_service import _require_matching_thread_creation_intent
 from yuxi.services.patient_service import (
     create_patient_view,
+    delete_patient_view,
     get_patient_view,
     require_patient_for_thread_binding,
     update_patient_view,
@@ -187,3 +188,112 @@ async def test_conversation_persists_immutable_patient_binding(session):
 
     stored = await ConversationRepository(session).get_conversation_by_thread_id("thread-clinical-1")
     assert stored.patient_id == patient["id"]
+
+
+async def test_delete_patient_cleans_case_data_and_soft_deletes(session, monkeypatch):
+    """Owner 删除患者:软删行、清空病例数据与向量;非 Owner 不可删。"""
+    from yuxi.storage.postgres.models_clinical import (
+        Patient,
+        PatientChunk,
+        PatientDocument,
+        PatientDocumentRevision,
+        PatientDocumentVersion,
+        PatientImportBatch,
+        PatientSnapshot,
+    )
+
+    removed = []
+
+    async def _fake_delete(chunk_ids):
+        removed.extend(chunk_ids)
+
+    import yuxi.knowledge.patient_index as patient_index
+
+    monkeypatch.setattr(patient_index, "delete_orphan_vectors", _fake_delete)
+
+    patient = await _create_patient(session, uid="doctor-1", display_code="P-DEL0001")
+    session.add(
+        PatientDocument(
+            id="del-doc",
+            patient_id=patient["id"],
+            document_type="medical_record",
+            logical_key="del:doc",
+            status="active",
+        )
+    )
+    await session.flush()
+    session.add(
+        PatientImportBatch(
+            id="del-batch",
+            patient_id=patient["id"],
+            source_kind="thread_upload",
+            status="published",
+            identity_status="matched",
+            assignment_status="confirmed",
+            requested_by="doctor-1",
+        )
+    )
+    await session.flush()
+    session.add(
+        PatientDocumentVersion(
+            id="del-ver",
+            document_id="del-doc",
+            patient_id=patient["id"],
+            version=1,
+            content_hash="a" * 64,
+            original_object_key="clinical/del/v1.pdf",
+            import_batch_id="del-batch",
+            status="active",
+        )
+    )
+    await session.flush()
+    session.add(
+        PatientDocumentRevision(
+            id="del-rev",
+            document_version_id="del-ver",
+            version=1,
+            content="内容",
+            status="approved",
+        )
+    )
+    session.add(
+        PatientChunk(
+            chunk_id="del-chunk-1",
+            patient_id=patient["id"],
+            document_id="del-doc",
+            document_version_id="del-ver",
+            revision_version=1,
+            chunk_index=0,
+            content="内容",
+        )
+    )
+    session.add(
+        PatientSnapshot(
+            id="del-snap",
+            patient_id=patient["id"],
+            sequence=1,
+            status="published",
+            manifest_hash="h",
+        )
+    )
+    await session.commit()
+
+    result = await delete_patient_view(patient_id=patient["id"], current_uid="doctor-1", db=session)
+    assert result["status"] == "deleted"
+    assert removed == ["del-chunk-1"]
+
+    stored = await session.get(Patient, patient["id"])
+    assert stored.status == "deleted" and stored.current_snapshot_id is None
+    assert (await session.get(PatientDocument, "del-doc")) is None
+    assert (await session.get(PatientDocumentVersion, "del-ver")) is None
+    assert (await session.get(PatientDocumentRevision, "del-rev")) is None
+    assert (await session.get(PatientChunk, "del-chunk-1")) is None
+    assert (await session.get(PatientImportBatch, "del-batch")) is None
+    assert (await session.get(PatientSnapshot, "del-snap")) is None
+
+
+async def test_delete_patient_rejects_non_owner(session):
+    patient = await _create_patient(session, uid="doctor-1", display_code="P-DEL0002")
+    with pytest.raises(HTTPException) as exc:
+        await delete_patient_view(patient_id=patient["id"], current_uid="doctor-2", db=session)
+    assert exc.value.status_code == 404

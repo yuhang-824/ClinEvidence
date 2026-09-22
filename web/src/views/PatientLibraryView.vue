@@ -1,5 +1,5 @@
 <template>
-  <div class="patient-library">
+  <div class="patient-library" @click="contextMenu.visible = false">
     <div class="library-side">
       <div class="library-side-title">患者库</div>
       <button
@@ -8,11 +8,47 @@
         class="patient-item"
         :class="{ active: patient.id === selectedId }"
         @click="selectPatient(patient.id)"
+        @contextmenu.prevent="openContextMenu($event, patient)"
       >
         <span class="patient-code">{{ patient.display_code }}</span>
         <span class="patient-flag">{{ patient.current_snapshot_id ? '有快照' : '无快照' }}</span>
       </button>
       <div v-if="!patients.length && !loading" class="library-empty">暂无可访问的患者</div>
+    </div>
+
+    <div
+      v-if="contextMenu.visible"
+      class="context-menu"
+      :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
+    >
+      <button class="context-item danger" @click="askDeletePatient">删除患者</button>
+    </div>
+
+    <div v-if="deleteConfirm.visible" class="chunk-overlay" @click.self="deleteConfirm.visible = false">
+      <div class="chunk-panel delete-panel">
+        <div class="chunk-panel-header">
+          <span>删除患者 {{ deleteConfirm.displayCode }}</span>
+          <button class="chunk-close" @click="deleteConfirm.visible = false">×</button>
+        </div>
+        <p class="delete-warning">
+          将永久删除该患者的全部病例文档、版本、切块、快照与向量,绑定该患者的会话将无法再检索其资料。此操作不可撤销。
+        </p>
+        <label class="delete-confirm-field">
+          输入患者编号 <b>{{ deleteConfirm.displayCode }}</b> 以确认
+          <input v-model="deleteConfirm.input" class="record-input" placeholder="输入编号" />
+        </label>
+        <div class="delete-actions">
+          <button class="record-secondary" @click="deleteConfirm.visible = false">取消</button>
+          <button
+            class="record-primary delete-btn"
+            :disabled="deleteConfirm.input !== deleteConfirm.displayCode || deleting"
+            @click="deletePatient"
+          >
+            {{ deleting ? '删除中…' : '永久删除' }}
+          </button>
+        </div>
+        <div v-if="deleteConfirm.error" class="record-error">{{ deleteConfirm.error }}</div>
+      </div>
     </div>
 
     <div class="library-main">
@@ -163,6 +199,49 @@ const loadLibrary = async () => {
 const viewChunks = async (revisionId) => {
   const detail = await clinicalApi.getRevisionChunks(revisionId)
   chunkPanel.value = { visible: true, chunks: detail.chunks }
+}
+
+// 右键菜单与删除:删除仅 Owner 可执行,需输入编号二次确认
+const contextMenu = ref({ visible: false, x: 0, y: 0, patient: null })
+const deleteConfirm = ref({ visible: false, patient: null, displayCode: '', input: '', error: '' })
+const deleting = ref(false)
+
+const openContextMenu = (event, patient) => {
+  contextMenu.value = { visible: true, x: event.clientX, y: event.clientY, patient }
+}
+
+const askDeletePatient = () => {
+  const patient = contextMenu.value.patient
+  contextMenu.value = { ...contextMenu.value, visible: false }
+  if (!patient) return
+  deleteConfirm.value = {
+    visible: true,
+    patient,
+    displayCode: patient.display_code,
+    input: '',
+    error: ''
+  }
+}
+
+const deletePatient = async () => {
+  if (!deleteConfirm.value.patient) return
+  deleting.value = true
+  deleteConfirm.value.error = ''
+  try {
+    await clinicalApi.deletePatient(deleteConfirm.value.patient.id)
+    deleteConfirm.value.visible = false
+    if (selectedId.value === deleteConfirm.value.patient.id) {
+      selectedId.value = ''
+      selected.value = null
+      library.value = null
+    }
+    patients.value = patients.value.filter((p) => p.id !== deleteConfirm.value.patient.id)
+    if (patients.value.length && !selectedId.value) selectPatient(patients.value[0].id)
+  } catch (error) {
+    deleteConfirm.value.error = error?.response?.data?.detail || error?.message || '删除失败'
+  } finally {
+    deleting.value = false
+  }
 }
 
 loadPatients()
@@ -453,5 +532,111 @@ loadPatients()
   word-break: break-word;
   font-size: 12px;
   font-family: inherit;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 2200;
+  min-width: 120px;
+  padding: 4px;
+  background: var(--bg-color, #fff);
+  color: var(--text-color, #1f2329);
+  border: 1px solid var(--border-color, #e5e6eb);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+}
+
+.context-item {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.context-item:hover {
+  background: var(--border-color, #f0f1f3);
+}
+
+.context-item.danger {
+  color: var(--danger-color, #d93026);
+}
+
+.delete-panel {
+  width: min(440px, calc(100vw - 48px));
+}
+
+.delete-warning {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--danger-color, #d93026);
+}
+
+.delete-confirm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  margin-bottom: 14px;
+}
+
+.delete-confirm-field input {
+  padding: 8px 10px;
+  border: 1px solid var(--border-color, #e5e6eb);
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+}
+
+.delete-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.delete-btn {
+  background: var(--danger-color, #d93026);
+}
+
+.record-secondary {
+  padding: 8px 14px;
+  border: 1px solid var(--border-color, #e5e6eb);
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.record-primary {
+  padding: 8px 14px;
+  border: none;
+  border-radius: 8px;
+  background: var(--primary-color, #2563eb);
+  color: #fff;
+  cursor: pointer;
+}
+
+.record-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.record-input {
+  padding: 8px 10px;
+  border: 1px solid var(--border-color, #e5e6eb);
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+}
+
+.record-error {
+  color: var(--danger-color, #d93026);
+  font-size: 12px;
 }
 </style>

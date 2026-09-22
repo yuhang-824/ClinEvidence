@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from './base'
+import { apiDelete, apiGet, apiPost } from './base'
 
 /**
  * ClinEvidence 患者域 API:患者、就诊与导入批次。
@@ -41,4 +41,8 @@ Object.assign(clinicalApi, {
   publishBatch: (batchId) => apiPost(`/api/clinical/import-batches/${batchId}/publish`, {}),
 
   finalizeBatch: (batchId) => apiPost(`/api/clinical/import-batches/${batchId}/finalize`, {})
+})
+
+Object.assign(clinicalApi, {
+  deletePatient: (patientId) => apiDelete(`/api/clinical/patients/${patientId}`)
 })

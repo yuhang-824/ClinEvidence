@@ -7,7 +7,7 @@ patients 行的身份字段(owner_uid、identity_fingerprint)与绑定关系不�
 import secrets
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.repositories.patient_repository import PatientRepository, new_clinical_id
@@ -390,4 +390,65 @@ async def get_revision_chunks_view(*, revision_id: str, current_uid: str, db: As
             }
             for chunk in chunks
         ],
+    }
+
+
+async def delete_patient_view(*, patient_id: str, current_uid: str, db: AsyncSession) -> dict:
+    """删除患者:软删患者行,同步清理病例数据(文档/版本/修订/切块/快照/批次)与向量。
+
+    - 仅 Owner 可删除;协作授权者无权。
+    - 会话绑定保留(不可变绑定的 RESTRICT 外键),绑定会话检索将得到患者已删除的明确失败。
+    - 向量先按 chunk_id 清理,再删 PG 病例数据;患者行软删后不可再查询。
+    """
+    from yuxi.knowledge.patient_index import delete_orphan_vectors
+    from yuxi.storage.postgres.models_clinical import (
+        PatientChunk,
+        PatientDocument,
+        PatientDocumentRevision,
+        PatientDocumentVersion,
+        PatientImportBatch,
+        PatientSnapshot,
+        PatientSnapshotMember,
+    )
+
+    repo = PatientRepository(db)
+    patient = await repo.get_accessible(patient_id, str(current_uid))
+    if patient is None or patient.status == "deleted":
+        raise HTTPException(status_code=404, detail="患者不存在")
+    if patient.owner_uid != str(current_uid):
+        raise HTTPException(status_code=403, detail="仅患者 Owner 可删除患者")
+
+    chunk_ids = list(
+        (await db.execute(select(PatientChunk.chunk_id).where(PatientChunk.patient_id == patient.id))).scalars()
+    )
+    if chunk_ids:
+        await delete_orphan_vectors(chunk_ids)
+
+    await db.execute(
+        delete(PatientSnapshotMember).where(
+            PatientSnapshotMember.snapshot_id.in_(
+                select(PatientSnapshot.id).where(PatientSnapshot.patient_id == patient.id)
+            )
+        )
+    )
+    await db.execute(delete(PatientSnapshot).where(PatientSnapshot.patient_id == patient.id))
+    await db.execute(delete(PatientChunk).where(PatientChunk.patient_id == patient.id))
+    await db.execute(
+        delete(PatientDocumentRevision).where(
+            PatientDocumentRevision.document_version_id.in_(
+                select(PatientDocumentVersion.id).where(PatientDocumentVersion.patient_id == patient.id)
+            )
+        )
+    )
+    await db.execute(delete(PatientDocumentVersion).where(PatientDocumentVersion.patient_id == patient.id))
+    await db.execute(delete(PatientDocument).where(PatientDocument.patient_id == patient.id))
+    await db.execute(delete(PatientImportBatch).where(PatientImportBatch.patient_id == patient.id))
+    patient.status = "deleted"
+    patient.current_snapshot_id = None
+    await db.commit()
+    return {
+        "id": patient.id,
+        "display_code": patient.display_code,
+        "status": patient.status,
+        "removed_chunks": len(chunk_ids),
     }
