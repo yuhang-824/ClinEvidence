@@ -83,7 +83,12 @@
           </div>
           <div class="header-actions">
             <button class="record-secondary upload-btn" @click="uploadVisible = true">上传病例</button>
-            <button class="refresh-btn" @click="loadLibrary">刷新</button>
+            <button
+            class="refresh-btn"
+            @click="loadPatients().then(() => selectedId && loadLibrary())"
+          >
+            刷新
+          </button>
           </div>
         </div>
 
@@ -227,6 +232,11 @@ const selectPatient = async (patientId) => {
 const loadLibrary = async () => {
   if (!selectedId.value) return
   library.value = await clinicalApi.getPatientLibrary(selectedId.value)
+  // 快照可能在本页之外(如会话上传)发布,详情拉取后同步列表徽标
+  const item = patients.value.find((p) => p.id === selectedId.value)
+  if (item && library.value.patient) {
+    item.current_snapshot_id = library.value.patient.current_snapshot_id
+  }
 }
 
 const viewChunks = async (revisionId) => {
