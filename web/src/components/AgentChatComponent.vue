@@ -280,10 +280,10 @@
                         v-if="requiresPatient"
                         type="button"
                         class="direct-steer-button"
-                        title="上传病例到当前患者的病例库,经审核后发布新快照"
+                        title="向当前患者的病例库补充新资料或新版本;已有病例无需上传,直接提问即可自动检索"
                         @click="openRecordUpload"
                       >
-                        上传病例
+                        补充病历
                       </button>
                       <ToolApprovalModeSelector
                         upward

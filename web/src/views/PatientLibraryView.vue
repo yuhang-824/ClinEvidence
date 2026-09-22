@@ -82,7 +82,7 @@
             </div>
           </div>
           <div class="header-actions">
-            <button class="record-secondary upload-btn" @click="uploadVisible = true">上传病例</button>
+            <button class="record-secondary upload-btn" @click="uploadVisible = true">补充病历</button>
             <button
             class="refresh-btn"
             @click="loadPatients().then(() => selectedId && loadLibrary())"

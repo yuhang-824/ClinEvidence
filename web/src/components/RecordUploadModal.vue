@@ -2,11 +2,12 @@
   <div v-if="visible" class="record-upload-overlay" role="dialog" aria-modal="true">
     <div class="record-upload-card">
       <div class="record-upload-header">
-        <span>上传病历到患者库</span>
+        <span>向患者库补充病历({{ displayCode }})</span>
         <button class="record-close" aria-label="关闭" @click="emit('close')">×</button>
       </div>
       <p class="record-hint">
-        病例将入库当前会话患者({{ displayCode }}),经归属确认与审核后发布为新快照;发布前检索不到。
+        该患者已有的已发布病例无需上传,直接提问即可自动检索。此入口用于补充新的病历文件
+        (如术后记录、随访资料),经归属确认与审核后发布为新快照。
       </p>
 
       <div v-if="!batch" class="record-upload-body">
