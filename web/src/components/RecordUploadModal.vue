@@ -68,8 +68,12 @@
           :disabled="advancing"
           @click="approveAndPublish"
         >
-          {{ advancing ? '处理中…' : '审核通过并发布快照' }}
+          {{ advancing ? '审核发布中:切块并向量编码,约需 1-2 分钟,请勿关闭…' : '审核通过并发布快照' }}
         </button>
+        <div v-if="advancing" class="record-hint">
+          正在调用嵌入模型为每个切块编码向量,完成后自动发布;期间可离开此弹窗,
+          进度可在患者库的导入批次表中查看,重新点击将从未完成步骤继续(幂等)。
+        </div>
 
         <div v-if="batch.status === 'published'" class="record-done">
           已发布快照 {{ batch.published_snapshot_id?.slice(0, 8) }},患者检索即刻可用。

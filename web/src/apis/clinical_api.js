@@ -40,7 +40,12 @@ Object.assign(clinicalApi, {
 
   publishBatch: (batchId) => apiPost(`/api/clinical/import-batches/${batchId}/publish`, {}),
 
-  finalizeBatch: (batchId) => apiPost(`/api/clinical/import-batches/${batchId}/finalize`, {})
+  finalizeBatch: (batchId) =>
+    apiPost(
+      `/api/clinical/import-batches/${batchId}/finalize`,
+      {},
+      { timeout: 300000 }
+    )
 })
 
 Object.assign(clinicalApi, {

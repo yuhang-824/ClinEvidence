@@ -10,6 +10,7 @@ import hashlib
 import os
 import re
 import uuid
+from datetime import UTC
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -60,6 +61,15 @@ def evaluate_identity_status(patient_fingerprint: str | None, signals: list[str]
         if hash_identity_value(token, salt) == patient_fingerprint:
             return "matched"
     return "identity_conflict"
+
+
+def _normalize_naive_utc(value):
+    """把前端传入的带时区时间归一为 naive UTC,匹配列类型(仓库统一 naive UTC 惯例)。"""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(UTC).replace(tzinfo=None)
 
 
 def _content_hash(data: bytes) -> str:
@@ -683,6 +693,7 @@ async def confirm_patient_upload_view(
         raise HTTPException(status_code=404, detail="患者不存在")
     if patient.owner_uid != str(current_uid):
         raise HTTPException(status_code=403, detail="仅患者 Owner 可上传病例")
+    event_started_at = _normalize_naive_utc(event_started_at)
 
     minio_client = get_minio_client()
     bucket = minio_client.KB_BUCKETS["documents"]
