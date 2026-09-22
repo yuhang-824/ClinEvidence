@@ -234,21 +234,6 @@ const renameChat = () => {
       font-weight: 600;
     }
 
-    .patient-badge {
-      flex-shrink: 0;
-      margin-left: 6px;
-      padding: 1px 7px;
-      border-radius: 9px;
-      font-size: 10px;
-      font-family: monospace;
-      background: rgba(37, 99, 235, 0.12);
-      color: var(--primary-color, #2563eb);
-      max-width: 90px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
     .status-mask {
       background: linear-gradient(
         to right,
@@ -296,6 +281,21 @@ const renameChat = () => {
 
 .conversation-title {
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.patient-badge {
+  flex-shrink: 0;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  font-size: 10px;
+  font-family: monospace;
+  background: rgba(37, 99, 235, 0.12);
+  color: var(--primary-color, #2563eb);
+  max-width: 90px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
