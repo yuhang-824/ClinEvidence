@@ -48,7 +48,7 @@
       <div v-else class="record-status-body">
         <div class="status-line">批次 {{ batch.id.slice(0, 8) }}</div>
         <div class="status-grid">
-          <div>状态:<b>{{ statusLabel(batch.status) }}</b></div>
+          <div>状态:<b>{{ batchStatusLabel(batch) }}</b></div>
           <div>身份核验:<b>{{ batch.identity_status }}</b></div>
           <div>归属:<b>{{ batch.assignment_status }}</b></div>
           <div v-if="batch.error_code">错误:<b>{{ batch.error_code }}</b></div>
@@ -57,10 +57,14 @@
         <button
           v-if="batch.status === 'identity_check' && batch.assignment_status !== 'confirmed'"
           class="record-primary"
+          :disabled="confirming"
           @click="confirmAssignment"
         >
-          确认归属(该文件属于当前患者)
+          {{ confirming ? '已确认,解析中…' : '确认归属(该文件属于当前患者)' }}
         </button>
+        <div v-if="batch.status === 'identity_check' && batch.assignment_status === 'confirmed'" class="record-hint">
+          归属已确认,正在解析病例(约 30-60 秒),完成后出现审核按钮。
+        </div>
 
         <button
           v-if="batch.status === 'review_required'"
@@ -159,6 +163,16 @@ const statusLabel = (status) =>
     identity_conflict: '身份冲突'
   })[status] || status
 
+const batchStatusLabel = (b) => {
+  if (!b) return ''
+  if (b.status === 'identity_check') {
+    if (b.identity_status === 'pending') return '解析中(约 30-60 秒),完成后需确认归属'
+    if (b.assignment_status === 'confirmed') return '归属已确认 · 解析中(约 30-60 秒)'
+    return '等待归属确认'
+  }
+  return statusLabel(b.status)
+}
+
 const onFileChange = (event) => {
   file.value = event.target.files?.[0] || null
 }
@@ -230,13 +244,18 @@ const upload = async () => {
   }
 }
 
+const confirming = ref(false)
+
 const confirmAssignment = async () => {
   errorMessage.value = ''
+  confirming.value = true
   try {
     batch.value = await clinicalApi.confirmBatchAssignment(batch.value.id, 'manual')
     startPolling()
   } catch (error) {
     errorMessage.value = error?.response?.data?.detail || '归属确认失败'
+  } finally {
+    confirming.value = false
   }
 }
 
