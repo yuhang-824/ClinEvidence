@@ -436,8 +436,9 @@ async def fetch_remote_models(provider: ModelProvider) -> list[dict[str, Any]]:
         headers.setdefault("Authorization", f"Bearer {api_key}")
 
     capabilities = set(provider.capabilities or [])
+    # OpenAI 兼容接口的模型发现默认路径为 /models,留空不应导致无法发现模型
     endpoint_specs = [
-        (provider.models_endpoint, "chat"),
+        (provider.models_endpoint or "/models", "chat"),
     ]
     if "embedding" in capabilities:
         endpoint_specs.append((provider.embedding_models_endpoint, "embedding"))

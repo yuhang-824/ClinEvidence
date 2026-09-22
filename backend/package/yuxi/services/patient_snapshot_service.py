@@ -214,6 +214,7 @@ async def build_and_store_chunks(*, revision_id: str, current_uid: str, db: Asyn
 
     version = await db.get(PatientDocumentVersion, revision.document_version_id)
     document = await db.get(PatientDocument, version.document_id)
+    page_spans = _extract_page_spans(revision.structure_report)
     pieces = build_chunks_for_revision(revision.content or "")
     for piece in pieces:
         db.add(
@@ -228,13 +229,43 @@ async def build_and_store_chunks(*, revision_id: str, current_uid: str, db: Asyn
                 content=piece["content"],
                 char_start=piece["char_start"],
                 char_end=piece["char_end"],
-                page_number=None,
+                page_number=_resolve_page_number(page_spans, piece["char_start"], piece["char_end"]),
                 document_type=document.document_type,
             )
         )
     revision.indexed_at = utc_now_naive()
     await db.commit()
     return {"revision_id": revision.id, "chunk_count": len(pieces), "status": "built"}
+
+
+def _extract_page_spans(structure_report) -> list[dict]:
+    """从解析结构报告提取页区间映射 [{start, end, page}];无报告或格式不符返回空。"""
+    if not isinstance(structure_report, dict):
+        return []
+    spans = structure_report.get("page_spans")
+    if not isinstance(spans, list):
+        return []
+    valid = []
+    for span in spans:
+        if not isinstance(span, dict):
+            continue
+        start, end, page = span.get("start"), span.get("end"), span.get("page")
+        if all(isinstance(value, int) for value in (start, end, page)) and end > start:
+            valid.append({"start": start, "end": end, "page": page})
+    return valid
+
+
+def _resolve_page_number(page_spans: list[dict], char_start: int, char_end: int) -> int | None:
+    """按块区间与页区间的最大重叠解析页码;解析报告缺失时返回 None。"""
+    if not page_spans:
+        return None
+    best_page, best_overlap = None, 0
+    for span in page_spans:
+        overlap = min(char_end, span["end"]) - max(char_start, span["start"])
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_page = span["page"]
+    return best_page
 
 
 async def publish_snapshot(*, batch_id: str, current_uid: str, db: AsyncSession) -> dict:

@@ -146,12 +146,22 @@ test('知识库来源与历史消息保持独立的归一化语义', () => {
   assert.equal(conversations[0].messages.at(-1).isLast, true)
   assert.equal(conversations[0].status, 'finished')
 
+  // MiniMax 等模型把思考内联在 <think> 标签中:解析时归入推理,正文剥离标签
   assert.deepEqual(
     MessageProcessor.parseAssistantMessageBody({
       type: 'ai',
       content: '<think>推理过程</think>最终答案'
     }),
-    { content: '<think>推理过程</think>最终答案', reasoningContent: '' }
+    { content: '最终答案', reasoningContent: '推理过程' }
+  )
+
+  // 流式中 </think> 未闭合:标签后内容全部视为推理,正文为空(不把思考当正文渲染)
+  assert.deepEqual(
+    MessageProcessor.parseAssistantMessageBody({
+      type: 'ai',
+      content: '<think>推理过程进行中'
+    }),
+    { content: '', reasoningContent: '推理过程进行中' }
   )
 })
 
