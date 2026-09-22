@@ -190,6 +190,11 @@ const props = defineProps({
     type: Object,
     required: true
   },
+  // 同一 run 的全部消息;来源提取需要 run 内中间消息上的检索工具调用
+  runMessages: {
+    type: Array,
+    default: null
+  },
   // 是否正在处理中
   isProcessing: {
     type: Boolean,
@@ -338,10 +343,17 @@ const messageImageMimeType = computed(
 const mentionDisplayLabels = computed(() => buildMentionDisplayLabels(props.mention || {}))
 
 const messageSources = computed(() => {
-  if (props.message.type === 'ai') {
-    return MessageProcessor.extractSourcesFromMessage(props.message, availableKnowledgeBases.value)
+  if (props.message.type !== 'ai') {
+    return { knowledgeChunks: [], webSources: [], patientChunks: [] }
   }
-  return { knowledgeChunks: [], webSources: [], patientChunks: [] }
+  // 多工具 run:检索调用挂在中间消息上,按 run 级消息提取来源
+  if (Array.isArray(props.runMessages) && props.runMessages.length) {
+    return MessageProcessor.extractSourcesFromConversation(
+      { messages: props.runMessages },
+      availableKnowledgeBases.value
+    )
+  }
+  return MessageProcessor.extractSourcesFromMessage(props.message, availableKnowledgeBases.value)
 })
 
 // === 回答引用：点击行内引用标记后展示检索到的证据 ===

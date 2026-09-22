@@ -72,7 +72,9 @@ export const getConversationDisplayItems = (
         type: 'message',
         key: message.id || `message-${index}`,
         message: reasoningContent ? { ...message, reasoning_content: '' } : message,
-        sourceIndex: index
+        sourceIndex: index,
+        // 来源提取需要整个 run 的消息(检索工具调用挂在中间消息上)
+        runMessages: conv.messages
       })
     }
 

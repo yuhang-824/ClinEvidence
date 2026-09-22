@@ -379,20 +379,35 @@ export class MessageProcessor {
   static extractSourcesFromConversation(conv, databases = []) {
     return {
       knowledgeChunks: MessageProcessor.extractKnowledgeChunksFromConversation(conv, databases),
+      patientChunks: MessageProcessor.extractPatientChunksFromConversation(conv),
       webSources: MessageProcessor.extractWebSourcesFromConversation(conv)
     }
   }
 
   /**
    * 解析助手消息正文与推理内容，保持渲染和列表拆分使用同一套规则。
+   * 兼容把思考内联在正文 <think>...</think> 标签中的模型(MiniMax 等):
+   * 未闭合时(流式中)标签后内容全部视为推理,正文为空。
    * @param {Object} message - AI 消息对象
    * @returns {{content: string, reasoningContent: string}}
    */
   static parseAssistantMessageBody(message) {
-    return {
-      content: typeof message?.content === 'string' ? message.content.trim() : '',
-      reasoningContent: message?.reasoning_content || ''
+    let content = typeof message?.content === 'string' ? message.content.trim() : ''
+    let reasoningContent = message?.reasoning_content || ''
+
+    const openIndex = content.indexOf('<think>')
+    if (openIndex !== -1) {
+      const closeIndex = content.indexOf('</think>')
+      const inlineThinking =
+        closeIndex === -1 ? content.slice(openIndex + '<think>'.length) : content.slice(openIndex + '<think>'.length, closeIndex)
+      const inlineThinkingText = inlineThinking.trim()
+      if (inlineThinkingText) {
+        reasoningContent = reasoningContent ? `${reasoningContent}\n${inlineThinkingText}` : inlineThinkingText
+      }
+      content = closeIndex === -1 ? '' : (content.slice(0, openIndex) + content.slice(closeIndex + '</think>'.length)).trim()
     }
+
+    return { content, reasoningContent }
   }
 
   /**
