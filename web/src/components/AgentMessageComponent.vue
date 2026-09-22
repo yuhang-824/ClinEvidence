@@ -341,7 +341,7 @@ const messageSources = computed(() => {
   if (props.message.type === 'ai') {
     return MessageProcessor.extractSourcesFromMessage(props.message, availableKnowledgeBases.value)
   }
-  return { knowledgeChunks: [], webSources: [] }
+  return { knowledgeChunks: [], webSources: [], patientChunks: [] }
 })
 
 // === 回答引用：点击行内引用标记后展示检索到的证据 ===

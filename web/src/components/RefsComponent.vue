@@ -83,6 +83,7 @@
     <!-- 来源详情面板 -->
     <div v-if="isSourcesExpanded" class="sources-panel-body">
       <KnowledgeSourceSection v-if="knowledgeChunks.length > 0" :chunks="knowledgeChunks" />
+      <PatientRecordSourceSection v-if="patientChunks.length > 0" :chunks="patientChunks" />
       <WebSearchSourceSection v-if="webSources.length > 0" :sources="webSources" />
     </div>
   </div>
@@ -125,6 +126,7 @@ import { agentApi } from '@/apis'
 import { formatChatTime } from '@/utils/time'
 import KnowledgeSourceSection from '@/components/KnowledgeSourceSection.vue'
 import WebSearchSourceSection from '@/components/WebSearchSourceSection.vue'
+import PatientRecordSourceSection from '@/components/PatientRecordSourceSection.vue'
 import { formatRunTimingDuration, getRunTotalLatencyMs } from '@/utils/runTiming'
 
 const emit = defineEmits(['retry', 'openRefs'])
@@ -153,13 +155,20 @@ const isSourcesExpanded = ref(false)
 const knowledgeChunks = computed(() =>
   Array.isArray(props.sources?.knowledgeChunks) ? props.sources.knowledgeChunks : []
 )
+const patientChunks = computed(() =>
+  Array.isArray(props.sources?.patientChunks) ? props.sources.patientChunks : []
+)
 const webSources = computed(() =>
   Array.isArray(props.sources?.webSources) ? props.sources.webSources : []
 )
 
-const hasSources = computed(() => knowledgeChunks.value.length > 0 || webSources.value.length > 0)
+const hasSources = computed(
+  () => knowledgeChunks.value.length > 0 || patientChunks.value.length > 0 || webSources.value.length > 0
+)
 
-const sourceCount = computed(() => knowledgeChunks.value.length + webSources.value.length)
+const sourceCount = computed(
+  () => knowledgeChunks.value.length + patientChunks.value.length + webSources.value.length
+)
 
 const toggleSources = () => {
   isSourcesExpanded.value = !isSourcesExpanded.value

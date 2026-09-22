@@ -2,6 +2,7 @@ import { sortChunksBySource } from './kbChunkScore.js'
 
 /** 内置知识库检索工具：结果按 kb_id 归组，而不是按工具名当作库名。 */
 const KNOWLEDGE_RETRIEVAL_TOOLS = new Set(['query_kb'])
+const PATIENT_RETRIEVAL_TOOLS = new Set(['search_patient_records'])
 
 /** 解析工具返回的 JSON 内容。 */
 const parseToolResultContent = (content) => {
@@ -313,14 +314,60 @@ export class MessageProcessor {
    * @returns {{knowledgeChunks: Array, webSources: Array}}
    */
   static extractSourcesFromMessage(message, databases = []) {
-    if (!message || message.type !== 'ai') return { knowledgeChunks: [], webSources: [] }
+    if (!message || message.type !== 'ai') {
+      return { knowledgeChunks: [], webSources: [], patientChunks: [] }
+    }
 
     // 复用提取逻辑，通过构建临时对话对象
     const mockConv = { messages: [message] }
     return {
       knowledgeChunks: MessageProcessor.extractKnowledgeChunksFromConversation(mockConv, databases),
-      webSources: MessageProcessor.extractWebSourcesFromConversation(mockConv)
+      webSources: MessageProcessor.extractWebSourcesFromConversation(mockConv),
+      patientChunks: MessageProcessor.extractPatientChunksFromConversation(mockConv)
     }
+  }
+
+  /**
+   * 从一轮对话的工具调用中提取患者病历检索来源(search_patient_records)。
+   * 患者通道与知识通道分开源标注,避免医生混淆回答依据。
+   * @param {Object} conv - 单轮对话
+   * @returns {Array} patientChunks
+   */
+  static extractPatientChunksFromConversation(conv) {
+    if (!conv || !Array.isArray(conv.messages) || conv.messages.length === 0) return []
+
+    const normalizedChunks = []
+    const dedupSet = new Set()
+
+    for (const msg of conv.messages) {
+      if (!msg || msg.type !== 'ai' || !Array.isArray(msg.tool_calls)) continue
+
+      for (const toolCall of msg.tool_calls) {
+        const toolName = toolCall?.name || toolCall?.function?.name
+        if (!PATIENT_RETRIEVAL_TOOLS.has(toolName)) continue
+
+        const parsed = parseToolResultContent(toolCall?.tool_call_result?.content)
+        const chunks = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.results) ? parsed.results : []
+        for (const chunk of chunks) {
+          if (!chunk || typeof chunk !== 'object') continue
+          const content = typeof chunk.content === 'string' ? chunk.content.trim() : ''
+          if (!content) continue
+          const dedupKey = chunk.chunk_id || content
+          if (dedupSet.has(dedupKey)) continue
+          dedupSet.add(dedupKey)
+          normalizedChunks.push({
+            chunk_id: chunk.chunk_id || '',
+            content,
+            document_type: chunk.document_type || '',
+            page_number: chunk.page_number,
+            snapshot_id: chunk.snapshot_id || '',
+            snapshot_sequence: chunk.snapshot_sequence,
+            score: typeof chunk.score === 'number' ? chunk.score : null
+          })
+        }
+      }
+    }
+    return normalizedChunks
   }
 
   /**
