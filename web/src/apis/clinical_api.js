@@ -46,3 +46,14 @@ Object.assign(clinicalApi, {
 Object.assign(clinicalApi, {
   deletePatient: (patientId) => apiDelete(`/api/clinical/patients/${patientId}`)
 })
+
+Object.assign(clinicalApi, {
+  uploadPatientTmp: (patientId, file) => {
+    const form = new FormData()
+    form.append('file', file)
+    return apiPost(`/api/clinical/patients/${patientId}/records/tmp`, form)
+  },
+
+  confirmPatientUpload: (patientId, payload) =>
+    apiPost(`/api/clinical/patients/${patientId}/records/confirm`, payload)
+})

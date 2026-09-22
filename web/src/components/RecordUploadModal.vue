@@ -11,6 +11,17 @@
 
       <div v-if="!batch" class="record-upload-body">
         <input ref="fileInput" type="file" accept=".pdf,.doc,.docx" @change="onFileChange" />
+        <label v-if="mode === 'patient' && documents.length" class="record-field">
+          归属文档
+          <select v-model="targetLogicalKey" class="record-input">
+            <option value="">新建文档(首次上传的病例)</option>
+            <option v-for="document in documents" :key="document.id" :value="document.logical_key">
+              更新:{{ document.document_type }}(当前 v{{
+                document.versions[document.versions.length - 1]?.version
+              }})
+            </option>
+          </select>
+        </label>
         <label class="record-field">
           文书类型
           <input v-model="documentType" class="record-input" placeholder="medical_record" />
@@ -79,9 +90,10 @@ import { clinicalApi } from '@/apis/clinical_api'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
-  threadId: { type: String, required: true },
+  threadId: { type: String, default: '' },
   patientId: { type: String, default: '' },
-  displayCode: { type: String, default: '' }
+  displayCode: { type: String, default: '' },
+  mode: { type: String, default: 'thread' }
 })
 const emit = defineEmits(['close', 'published'])
 
@@ -105,10 +117,26 @@ const loadEncounters = async () => {
   }
 }
 
+const loadDocuments = async () => {
+  if (props.mode !== 'patient' || !props.patientId) {
+    documents.value = []
+    return
+  }
+  try {
+    const library = await clinicalApi.getPatientLibrary(props.patientId)
+    documents.value = library.documents
+  } catch {
+    documents.value = []
+  }
+}
+
 watch(
   () => [props.visible, props.patientId],
   ([visible]) => {
-    if (visible) loadEncounters()
+    if (visible) {
+      loadEncounters()
+      loadDocuments()
+    }
   },
   { immediate: true }
 )
@@ -162,18 +190,34 @@ const startPolling = () => {
   }, 3000)
 }
 
+const documents = ref([])
+const targetLogicalKey = ref('')
+
 const upload = async () => {
   if (!file.value) return
   uploading.value = true
   errorMessage.value = ''
   try {
-    const tmp = await clinicalApi.uploadRecordTmp(props.threadId, file.value)
-    batch.value = await clinicalApi.confirmRecordUpload(props.threadId, {
-      tmp_file_ids: [tmp.tmp_file_id],
-      document_type: documentType.value.trim() || 'medical_record',
-      visit_id: visitId.value || undefined,
-      event_started_at: eventStartedAt.value ? new Date(eventStartedAt.value).toISOString() : undefined
-    })
+    let batchResult
+    if (props.mode === 'patient') {
+      const tmp = await clinicalApi.uploadPatientTmp(props.patientId, file.value)
+      batchResult = await clinicalApi.confirmPatientUpload(props.patientId, {
+        tmp_file_ids: [tmp.tmp_file_id],
+        document_type: documentType.value.trim() || 'medical_record',
+        visit_id: visitId.value || undefined,
+        event_started_at: eventStartedAt.value ? new Date(eventStartedAt.value).toISOString() : undefined,
+        target_logical_key: targetLogicalKey.value || undefined
+      })
+    } else {
+      const tmp = await clinicalApi.uploadRecordTmp(props.threadId, file.value)
+      batchResult = await clinicalApi.confirmRecordUpload(props.threadId, {
+        tmp_file_ids: [tmp.tmp_file_id],
+        document_type: documentType.value.trim() || 'medical_record',
+        visit_id: visitId.value || undefined,
+        event_started_at: eventStartedAt.value ? new Date(eventStartedAt.value).toISOString() : undefined
+      })
+    }
+    batch.value = batchResult
     if (['identity_check', 'parsing', 'uploaded'].includes(batch.value.status)) startPolling()
   } catch (error) {
     errorMessage.value = error?.response?.data?.detail || error?.message || '上传失败'

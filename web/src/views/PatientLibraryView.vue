@@ -81,7 +81,10 @@
               {{ library.snapshots.find((s) => s.is_current)?.sequence ?? '无' }}
             </div>
           </div>
-          <button class="refresh-btn" @click="loadLibrary">刷新</button>
+          <div class="header-actions">
+            <button class="record-secondary upload-btn" @click="uploadVisible = true">上传病例</button>
+            <button class="refresh-btn" @click="loadLibrary">刷新</button>
+          </div>
         </div>
 
         <section class="detail-section">
@@ -165,6 +168,15 @@
       </template>
     </div>
 
+    <RecordUploadModal
+      mode="patient"
+      :visible="uploadVisible"
+      :patient-id="selectedId"
+      :display-code="selected?.display_code || ''"
+      @close="uploadVisible = false"
+      @published="loadLibrary"
+    />
+
     <div v-if="chunkPanel.visible" class="chunk-overlay" @click.self="chunkPanel.visible = false">
       <div class="chunk-panel">
         <div class="chunk-panel-header">
@@ -186,6 +198,7 @@
 <script setup>
 import { ref } from 'vue'
 import { clinicalApi } from '@/apis/clinical_api'
+import RecordUploadModal from '@/components/RecordUploadModal.vue'
 
 const patients = ref([])
 const selectedId = ref('')
@@ -193,6 +206,7 @@ const selected = ref(null)
 const library = ref(null)
 const loading = ref(false)
 const chunkPanel = ref({ visible: false, chunks: [] })
+const uploadVisible = ref(false)
 
 const loadPatients = async () => {
   loading.value = true
@@ -456,6 +470,18 @@ loadPatients()
   background: none;
   color: inherit;
   cursor: pointer;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.upload-btn {
+  background: var(--primary-color, #2563eb);
+  color: #fff;
+  border-color: var(--primary-color, #2563eb);
 }
 
 .detail-section {

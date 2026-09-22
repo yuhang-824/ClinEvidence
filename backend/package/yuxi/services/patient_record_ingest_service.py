@@ -195,6 +195,7 @@ async def _create_batch(
                 filename=item["filename"],
                 data=item["data"],
                 document_type=document_type,
+                logical_key=item.get("logical_key"),
                 logical_key_prefix=logical_key_prefix,
                 event_started_at=event_started_at,
             )
@@ -220,10 +221,15 @@ async def _store_original(
     filename: str,
     data: bytes,
     document_type: str,
+    logical_key: str | None,
     logical_key_prefix: str | None,
     event_started_at=None,
 ) -> str:
-    """保存不可变原件并建立逻辑文档与版本;同患者同内容幂等返回已有版本。"""
+    """保存不可变原件并建立逻辑文档与版本;同患者同内容幂等返回已有版本。
+
+    logical_key 显式传入(患者库"更新现有文档")时沿用,形成该逻辑文档的新版本;
+    否则按内容哈希生成,语义为新文档。
+    """
     content_hash = _content_hash(data)
     duplicate = await import_repo.find_version_by_content_hash(patient_id, content_hash)
     if duplicate is not None:
@@ -236,7 +242,7 @@ async def _store_original(
     bucket = minio_client.KB_BUCKETS["documents"]
     await minio_client.aupload_file(bucket, object_key, data)
 
-    logical_key = f"{logical_key_prefix or 'doc'}:{content_hash[:16]}"
+    logical_key = logical_key or f"{logical_key_prefix or 'doc'}:{content_hash[:16]}"
     document, _created = await import_repo.get_or_create_document(
         patient_id=patient_id,
         document_type=document_type,
@@ -626,5 +632,124 @@ async def seed_patient_files(
         manifest_hash=manifest_hash,
         logical_key_prefix=dataset_key,
         idempotency_key=f"{dataset_key}:{patient_key}:{manifest_hash[:16]}",
+        db=db,
+    )
+
+
+PATIENT_TMP_PREFIX = "clinical-patient-tmp"
+
+
+async def upload_patient_tmp_view(*, patient_id: str, file, current_uid: str, db: AsyncSession) -> dict:
+    """患者库直传原件到该患者名下的 tmp 路径;仅 Owner 可操作。"""
+    from yuxi.services.attachment_service import read_upload_with_limit
+
+    patient = await PatientRepository(db).get_accessible_active(patient_id, str(current_uid))
+    if patient is None:
+        raise HTTPException(status_code=404, detail="患者不存在")
+    if patient.owner_uid != str(current_uid):
+        raise HTTPException(status_code=403, detail="仅患者 Owner 可上传病例")
+    if not file or not getattr(file, "filename", None):
+        raise HTTPException(status_code=400, detail="无法识别的文件名")
+    safe_name = os.path.basename(file.filename).replace("\\", "_") or "record.pdf"
+    data = await read_upload_with_limit(
+        file,
+        max_size_bytes=_TMP_UPLOAD_MAX_BYTES,
+        too_large_message="病例文件超过大小限制",
+    )
+    tmp_file_id = uuid.uuid4().hex
+    object_key = f"{PATIENT_TMP_PREFIX}/{patient.id}/{tmp_file_id}/original/{safe_name}"
+    minio_client = get_minio_client()
+    bucket = minio_client.KB_BUCKETS["documents"]
+    await minio_client.aupload_file(bucket, object_key, data)
+    return {"tmp_file_id": tmp_file_id, "filename": safe_name, "size": len(data)}
+
+
+async def confirm_patient_upload_view(
+    *,
+    patient_id: str,
+    current_uid: str,
+    tmp_file_ids: list[str],
+    document_type: str,
+    visit_id: str | None,
+    event_started_at=None,
+    target_logical_key: str | None,
+    db: AsyncSession,
+) -> dict:
+    """患者库直传确认:Owner 为患者创建导入批次;指定逻辑文档时形成新版本(v2/v3)。"""
+    if not document_type or not document_type.strip():
+        raise HTTPException(status_code=400, detail="document_type 不能为空")
+    patient = await PatientRepository(db).get_accessible_active(patient_id, str(current_uid))
+    if patient is None:
+        raise HTTPException(status_code=404, detail="患者不存在")
+    if patient.owner_uid != str(current_uid):
+        raise HTTPException(status_code=403, detail="仅患者 Owner 可上传病例")
+
+    minio_client = get_minio_client()
+    bucket = minio_client.KB_BUCKETS["documents"]
+    files: list[dict] = []
+    hashes: list[str] = []
+    for tmp_id in tmp_file_ids:
+        if not re.fullmatch(r"[0-9a-f]{32}", str(tmp_id)):
+            raise HTTPException(status_code=400, detail="tmp_file_id 非法")
+        object_prefix = f"{PATIENT_TMP_PREFIX}/{patient.id}/{tmp_id}/original/"
+        objects = await minio_client.alist_object_metadata(bucket, object_prefix)
+        if not objects:
+            raise HTTPException(status_code=404, detail=f"tmp 对象不存在: {tmp_id}")
+        object_key = objects[0].get("object_name") or objects[0].get("name")
+        if not object_key:
+            raise HTTPException(status_code=404, detail=f"tmp 对象不存在: {tmp_id}")
+        data = await minio_client.adownload_file(bucket, object_key)
+        hashes.append(hashlib.sha256(data).hexdigest())
+        files.append(
+            {
+                "filename": object_key.rsplit("/", 1)[-1],
+                "data": data,
+                # 指定逻辑文档时沿用其 logical_key,形成该文档的新版本
+                "logical_key": target_logical_key if target_logical_key else None,
+            }
+        )
+
+    batch = await create_owner_upload_batch(
+        patient_id=patient.id,
+        current_uid=str(current_uid),
+        files=files,
+        document_type=document_type.strip(),
+        visit_id=visit_id,
+        event_started_at=event_started_at,
+        idempotency_key=f"owner-upload:{patient.id}:{hashlib.sha256(','.join(hashes).encode()).hexdigest()[:16]}"
+        if target_logical_key is None
+        else f"owner-upload:{patient.id}:{target_logical_key}:{hashes[0][:16]}",
+        db=db,
+    )
+    for tmp_id in tmp_file_ids:
+        await minio_client.adelete_objects_by_prefix(
+            bucket, f"{PATIENT_TMP_PREFIX}/{patient.id}/{tmp_id}/original/"
+        )
+    return batch
+
+
+async def create_owner_upload_batch(
+    *,
+    patient_id: str,
+    current_uid: str,
+    files: list[dict],
+    document_type: str,
+    visit_id: str | None,
+    event_started_at=None,
+    idempotency_key: str | None,
+    db: AsyncSession,
+) -> dict:
+    """患者库 Owner 上传批次:与种子/会话上传同走 _create_batch,不做任何旁路写入。"""
+    return await _create_batch(
+        patient_id=patient_id,
+        conversation_id=None,
+        source_kind="thread_upload",
+        current_uid=str(current_uid),
+        files=files,
+        document_type=document_type,
+        visit_id=visit_id,
+        event_started_at=event_started_at,
+        logical_key_prefix=None,
+        idempotency_key=idempotency_key,
         db=db,
     )

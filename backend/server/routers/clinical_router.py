@@ -15,6 +15,18 @@ from yuxi.storage.postgres.models_business import User
 clinical = APIRouter(prefix="/clinical", tags=["clinical"])
 
 
+class PatientRecordConfirmRequest(BaseModel):
+    """患者库直传确认;target_logical_key 指定时形成该逻辑文档的新版本。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tmp_file_ids: list[str] = Field(min_length=1, max_length=20)
+    document_type: str = Field(max_length=64)
+    visit_id: str | None = Field(None, max_length=64)
+    event_started_at: datetime | None = None
+    target_logical_key: str | None = Field(None, max_length=255)
+
+
 class AssignmentConfirmRequest(BaseModel):
     """归属确认请求;确认方式 manual 或 manifest_review。"""
 
@@ -247,6 +259,39 @@ async def finalize_import_batch(
     """Owner 一键收口:审核 → 建块 → 写向量 → 发布;每步幂等,可重试。"""
     return await patient_snapshot.finalize_batch(
         batch_id=batch_id, current_uid=str(current_user.uid), db=db
+    )
+
+
+@clinical.post("/patients/{patient_id}/records/tmp")
+async def upload_patient_record_tmp(
+    patient_id: str,
+    file: UploadFile,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_required_user),
+):
+    """患者库直传:上传病例原件到该患者名下 tmp 路径(仅 Owner)。"""
+    return await patient_ingest.upload_patient_tmp_view(
+        patient_id=patient_id, file=file, current_uid=str(current_user.uid), db=db
+    )
+
+
+@clinical.post("/patients/{patient_id}/records/confirm", status_code=201)
+async def confirm_patient_record(
+    patient_id: str,
+    payload: PatientRecordConfirmRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_required_user),
+):
+    """患者库直传确认:创建导入批次;指定 logical_key 时形成该文档的新版本。"""
+    return await patient_ingest.confirm_patient_upload_view(
+        patient_id=patient_id,
+        current_uid=str(current_user.uid),
+        tmp_file_ids=payload.tmp_file_ids,
+        document_type=payload.document_type,
+        visit_id=payload.visit_id,
+        event_started_at=payload.event_started_at,
+        target_logical_key=payload.target_logical_key,
+        db=db,
     )
 
 
