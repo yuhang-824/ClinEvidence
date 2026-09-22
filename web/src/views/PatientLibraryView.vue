@@ -1,7 +1,26 @@
 <template>
   <div class="patient-library" @click="contextMenu.visible = false">
     <div class="library-side">
-      <div class="library-side-title">患者库</div>
+      <div class="library-side-header">
+        <div class="library-side-title">患者库</div>
+        <button class="add-patient-btn" title="新增患者" @click="openCreate">＋</button>
+      </div>
+      <div v-if="createPanel.visible" class="create-panel">
+        <input
+          v-model="createPanel.displayCode"
+          class="record-input"
+          placeholder="脱敏编号,留空自动生成"
+          maxlength="64"
+          @keyup.enter="createPatient"
+        />
+        <div class="create-actions">
+          <button class="record-secondary" @click="createPanel.visible = false">取消</button>
+          <button class="record-primary" :disabled="createPanel.creating" @click="createPatient">
+            {{ createPanel.creating ? '创建中…' : '创建' }}
+          </button>
+        </div>
+        <div v-if="createPanel.error" class="record-error">{{ createPanel.error }}</div>
+      </div>
       <button
         v-for="patient in patients"
         :key="patient.id"
@@ -201,6 +220,30 @@ const viewChunks = async (revisionId) => {
   chunkPanel.value = { visible: true, chunks: detail.chunks }
 }
 
+// 新增患者:编号可留空由服务端自动生成;创建后选中新患者
+const createPanel = ref({ visible: false, displayCode: '', creating: false, error: '' })
+
+const openCreate = () => {
+  createPanel.value = { visible: true, displayCode: '', creating: false, error: '' }
+}
+
+const createPatient = async () => {
+  createPanel.value.creating = true
+  createPanel.value.error = ''
+  try {
+    const patient = await clinicalApi.createPatient({
+      displayCode: createPanel.value.displayCode.trim() || null
+    })
+    createPanel.value.visible = false
+    patients.value = [patient, ...patients.value]
+    selectPatient(patient.id)
+  } catch (error) {
+    createPanel.value.error = error?.response?.data?.detail || error?.message || '创建失败'
+  } finally {
+    createPanel.value.creating = false
+  }
+}
+
 // 右键菜单与删除:删除仅 Owner 可执行,需输入编号二次确认
 const contextMenu = ref({ visible: false, x: 0, y: 0, patient: null })
 const deleteConfirm = ref({ visible: false, patient: null, displayCode: '', input: '', error: '' })
@@ -263,6 +306,85 @@ loadPatients()
 .library-side-title {
   font-weight: 600;
   margin-bottom: 12px;
+}
+
+.library-side-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.add-patient-btn {
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border-color, #e5e6eb);
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.add-patient-btn:hover {
+  border-color: var(--primary-color, #2563eb);
+  color: var(--primary-color, #2563eb);
+}
+
+.create-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--primary-color, #2563eb);
+  border-radius: 8px;
+}
+
+.create-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.record-input {
+  padding: 8px 10px;
+  border: 1px solid var(--border-color, #e5e6eb);
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  font-size: 12px;
+}
+
+.record-secondary {
+  padding: 6px 12px;
+  border: 1px solid var(--border-color, #e5e6eb);
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.record-primary {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 8px;
+  background: var(--primary-color, #2563eb);
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.record-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.record-error {
+  color: var(--danger-color, #d93026);
+  font-size: 12px;
 }
 
 .patient-item {
