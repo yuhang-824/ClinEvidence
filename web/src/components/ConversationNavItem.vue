@@ -16,6 +16,13 @@
       @click.middle="$emit('delete-chat', chat.id)"
     >
       <span class="conversation-title">{{ chat.title || '新的对话' }}</span>
+      <span
+        v-if="chat.patient?.display_code"
+        class="patient-badge"
+        :title="`该会话绑定患者:${chat.patient.display_code}`"
+      >
+        {{ chat.patient.display_code }}
+      </span>
       <span class="actions-mask"></span>
       <span
         v-if="chat.thread_status === 'loading' || chat.thread_status === 'ready'"
@@ -225,6 +232,21 @@ const renameChat = () => {
 
     .conversation-title {
       font-weight: 600;
+    }
+
+    .patient-badge {
+      flex-shrink: 0;
+      margin-left: 6px;
+      padding: 1px 7px;
+      border-radius: 9px;
+      font-size: 10px;
+      font-family: monospace;
+      background: rgba(37, 99, 235, 0.12);
+      color: var(--primary-color, #2563eb);
+      max-width: 90px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .status-mask {

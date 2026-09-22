@@ -276,6 +276,13 @@
                       />
                     </template>
                     <template #actions-left-extra>
+                      <span
+                        v-if="requiresPatient && currentThreadPatientCode"
+                        class="patient-chip"
+                        :title="`当前会话绑定患者:${currentThreadPatientCode}(不可更换)`"
+                      >
+                        患者:{{ currentThreadPatientCode }}
+                      </span>
                       <button
                         v-if="requiresPatient"
                         type="button"
@@ -1424,6 +1431,11 @@ const onClinicalPatientModalClosed = () => {
     patientSelectionResolve = null
   }
 }
+
+// 当前会话绑定的患者编号,常驻显示避免医生混淆会话归属
+const currentThreadPatientCode = computed(
+  () => chatThreadsStore.currentThread?.patient?.display_code || ''
+)
 
 // 病历入库上传:仅诊疗会话提供;病例走患者库管线,与聊天附件分开
 const recordUploadVisible = ref(false)
@@ -4570,6 +4582,18 @@ watch(currentChatId, (threadId, oldThreadId) => {
     }
 
     .queued-request-steer,
+    .patient-chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 10px;
+      border-radius: 14px;
+      font-size: 12px;
+      font-family: monospace;
+      background: rgba(37, 99, 235, 0.1);
+      color: var(--primary-color, #2563eb);
+      white-space: nowrap;
+    }
+
     .direct-steer-button {
       height: 28px;
       display: inline-flex;
