@@ -58,12 +58,12 @@ Owner：backend/package/yuxi/services/conversation_service.py
 
 | 验收主张 | 失败面 | 语义 Owner | 直接证据 / 命令 | 负向案例 | 当前结果 |
 |---|---|---|---|---|---|
-| 患者检索不越界 | 作用域由模型参数决定 | 患者通道工具契约 | 真实 HTTP 会话绑定患者后检索，回读结果全部属于当前患者已发布快照 | 模型传入其他患者标识，检索仍被约束或明确拒绝 | PG/单元层已验证:作用域由服务端会话解析,伪造命中被丢弃(unit 8 项);真实 HTTP/worker E2E 未运行 |
-| 冲突或未确认材料不发布 | 上传即混入患者通道 | 导入批次归属约束 | 分别上传有可靠冲突标识及无标识文件，回读归属和快照状态 | 冲突文件及未确认文件不可查询；无标识文件不被伪装成 matched | 单元层已验证:冲突吸收态不可确认放行、未确认批次停滞不发布(unit 7 项);真实 worker 未运行 |
-| 引用可回溯患者 | 引用无患者身份 | 引用验证 | 回读引用记录的患者标识与快照版本字段 | 伪造引用或跨患者引用被判定失败 | 单元层已验证:引用校验拒绝伪造与跨快照 chunk;真实 HTTP 未运行 |
-| 患者绑定不可修改且会话隔离 | 更新入口或摘要与缓存跨患者 | Conversation schema/service、上下文压缩链路 | 回读绑定并检查两个患者会话的模型输入 | 尝试修改绑定拒绝；另一患者内容进入输入即失败 | 真实 PG 已验证:RESTRICT 外键阻止删除、v7→v8 收敛(integration 3 项);摘要缓存隔离未实现(M7) |
-| 种子和交互使用同一发布流程 | CLI 绕过归属、审核或索引验证 | patient ingest service、snapshot repository | 真实 worker 导入并回读 PG/Milvus；同清单重复与中断重试 | 无权限确认、篡改已审核 hash、未发布范围均拒绝 | CLI 与线程上传同走 ingest service;发布链路端点已暴露;真实 worker/Milvus 未运行 |
-| 分册范围可复现 | 同患者其他分册污染答案 | 评测范围解析、检索与引用服务 | 同患者 A/B 分册差异事实的真实链路 | 范围限定 A 时检索、读取、引用 B 均失败 | 装机材料(清单/审核/scope map)已生成并经人工审核,CLI 预检通过;评测执行属 M4/M11 未运行 |
+| 患者检索不越界 | 作用域由模型参数决定 | 患者通道工具契约 | `pytest test/unit/services/test_clinical_retrieval.py` 8 项通过：服务端会话解析作用域，伪造与越快照命中被丢弃；真实 HTTP/worker E2E 未运行（环境缺完整链路） | 模型传入其他患者标识，检索仍被约束或明确拒绝 | Inferred |
+| 冲突或未确认材料不发布 | 上传即混入患者通道 | 导入批次归属约束 | `pytest test/unit/services/test_patient_record_ingest.py` 7 项通过：冲突吸收态不可确认放行、未确认批次停滞不发布；真实 worker 未运行 | 冲突文件及未确认文件不可查询；无标识文件不被伪装成 matched | Inferred |
+| 引用可回溯患者 | 引用无患者身份 | 引用验证 | `test_clinical_retrieval.py` 引用校验用例通过：伪造与跨快照 chunk 被拒；真实 HTTP 未运行 | 伪造引用或跨患者引用被判定失败 | Inferred |
+| 患者绑定不可修改且会话隔离 | 更新入口或摘要与缓存跨患者 | Conversation schema/service、上下文压缩链路 | 真实 PG integration 3 项通过：RESTRICT 外键阻止删除、v7→v8 收敛；摘要与缓存的患者隔离未实现（M7） | 尝试修改绑定拒绝；另一患者内容进入输入即失败 | Inferred |
+| 种子和交互使用同一发布流程 | CLI 绕过归属、审核或索引验证 | patient ingest service、snapshot repository | 代码核查：CLI 与线程上传同走 ingest service，发布链路端点已暴露；真实 worker/Milvus 未运行 | 无权限确认、篡改已审核 hash、未发布范围均拒绝 | Inspected |
+| 分册范围可复现 | 同患者其他分册污染答案 | 评测范围解析、检索与引用服务 | 装机材料（清单/审核/scope map）已生成并经人工审核，CLI 预检对真实数据通过；评测执行属 M4/M11 未运行 | 范围限定 A 时检索、读取、引用 B 均失败 | Inferred |
 
 实施按[测试规范](../../testing-guidelines.md)运行对应 unit、真实 HTTP integration 与 E2E；实现完成后本记录移入 `implemented/` 并改写为当前事实，回填实际命令与结果。
 
