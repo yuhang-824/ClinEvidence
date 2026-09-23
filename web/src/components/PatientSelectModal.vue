@@ -24,13 +24,31 @@
         </ul>
       </div>
       <div class="patient-select-footer">
-        <input
-          v-model="newDisplayCode"
-          class="patient-select-input"
-          placeholder="新患者脱敏编号(可留空自动生成)"
-          maxlength="64"
-        />
-        <button class="patient-select-create" :disabled="creating" @click="createPatient">
+        <div class="patient-create-fields">
+          <input
+            v-model="newDisplayCode"
+            class="patient-select-input"
+            aria-label="新患者脱敏编号"
+            placeholder="脱敏编号(可留空自动生成)"
+            maxlength="64"
+          />
+          <input
+            v-model="newCategory"
+            class="patient-select-input"
+            aria-label="患者病种"
+            list="clinical-patient-category-options"
+            placeholder="选择或输入病种"
+            maxlength="32"
+          />
+          <datalist id="clinical-patient-category-options">
+            <option v-for="category in categoryOptions" :key="category" :value="category" />
+          </datalist>
+        </div>
+        <button
+          class="patient-select-create"
+          :disabled="creating || !newCategory.trim()"
+          @click="createPatient"
+        >
           {{ creating ? '创建中…' : '创建患者' }}
         </button>
       </div>
@@ -39,7 +57,7 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { clinicalApi } from '@/apis/clinical_api'
 
 const props = defineProps({
@@ -52,12 +70,20 @@ const loading = ref(false)
 const errorMessage = ref('')
 const newDisplayCode = ref('')
 const creating = ref(false)
+const PATIENT_CATEGORIES = ['内膜癌', '宫颈癌', '卵巢癌']
+const newCategory = ref('')
+const categoryOptions = computed(() =>
+  [...new Set([...PATIENT_CATEGORIES, ...patients.value.map((patient) => patient.category).filter(Boolean)])]
+    .sort((left, right) => left.localeCompare(right, 'zh-CN'))
+)
 
 const loadPatients = async () => {
   loading.value = true
   errorMessage.value = ''
   try {
-    patients.value = await clinicalApi.listPatients()
+    patients.value = (await clinicalApi.listPatients()).sort((left, right) =>
+      left.display_code.localeCompare(right.display_code, 'zh-CN', { numeric: true })
+    )
   } catch (error) {
     errorMessage.value = error?.message || '患者列表加载失败'
   } finally {
@@ -73,14 +99,19 @@ watch(
 )
 
 const createPatient = async () => {
+  if (!newCategory.value.trim() || creating.value) return
   creating.value = true
   errorMessage.value = ''
   try {
     const patient = await clinicalApi.createPatient({
-      displayCode: newDisplayCode.value.trim() || null
+      displayCode: newDisplayCode.value.trim() || null,
+      category: newCategory.value.trim()
     })
     newDisplayCode.value = ''
-    patients.value = [patient, ...patients.value]
+    newCategory.value = ''
+    patients.value = [...patients.value, patient].sort((left, right) =>
+      left.display_code.localeCompare(right.display_code, 'zh-CN', { numeric: true })
+    )
     emit('select', patient)
   } catch (error) {
     errorMessage.value = error?.message || '患者创建失败'
@@ -199,10 +230,18 @@ const createPatient = async () => {
 .patient-select-footer {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
+}
+
+.patient-create-fields {
+  display: flex;
+  flex: 1 1 100%;
+  gap: 8px;
 }
 
 .patient-select-input {
   flex: 1;
+  min-width: 0;
   padding: 8px 10px;
   border: 1px solid var(--border-color, #e5e6eb);
   border-radius: 8px;

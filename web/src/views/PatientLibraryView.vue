@@ -1,11 +1,32 @@
 <template>
   <div class="patient-library" @click="contextMenu.visible = false">
+    <datalist id="patient-category-options">
+      <option v-for="category in categoryOptions" :key="category" :value="category" />
+    </datalist>
     <div class="library-side">
       <div class="library-side-header">
         <div class="library-side-title">患者库</div>
         <button class="add-patient-btn" title="新增患者" @click="openCreate">＋</button>
       </div>
+      <button
+        v-if="selectedCategory !== undefined"
+        type="button"
+        class="category-back"
+        @click="selectCategory(undefined)"
+      >
+        ‹ 返回病种分类
+      </button>
       <div v-if="createPanel.visible" class="create-panel">
+        <label class="category-label">
+          病种
+          <input
+            v-model="createPanel.category"
+            class="record-input"
+            list="patient-category-options"
+            placeholder="选择已有病种或输入新病种"
+            maxlength="32"
+          />
+        </label>
         <input
           v-model="createPanel.displayCode"
           class="record-input"
@@ -15,24 +36,50 @@
         />
         <div class="create-actions">
           <button class="record-secondary" @click="createPanel.visible = false">取消</button>
-          <button class="record-primary" :disabled="createPanel.creating" @click="createPatient">
+          <button
+            class="record-primary"
+            :disabled="createPanel.creating || !createPanel.category.trim()"
+            @click="createPatient"
+          >
             {{ createPanel.creating ? '创建中…' : '创建' }}
           </button>
         </div>
         <div v-if="createPanel.error" class="record-error">{{ createPanel.error }}</div>
       </div>
-      <button
-        v-for="patient in patients"
-        :key="patient.id"
-        class="patient-item"
-        :class="{ active: patient.id === selectedId }"
-        @click="selectPatient(patient.id)"
-        @contextmenu.prevent="openContextMenu($event, patient)"
-      >
-        <span class="patient-code">{{ patient.display_code }}</span>
-        <span class="patient-flag">{{ patient.current_snapshot_id ? '有快照' : '无快照' }}</span>
-      </button>
-      <div v-if="!patients.length && !loading" class="library-empty">暂无可访问的患者</div>
+      <div v-if="loading" class="library-empty">正在加载患者...</div>
+      <div v-else-if="patientsError" class="library-empty">
+        {{ patientsError }} <button class="record-secondary" @click="loadPatients">重试</button>
+      </div>
+      <template v-else-if="selectedCategory === undefined">
+        <button
+          v-for="group in categoryGroups"
+          :key="group.key"
+          type="button"
+          class="category-item"
+          :title="group.category || '未分类'"
+          @click="selectCategory(group.category)"
+        >
+          <span>{{ group.category || '未分类' }}</span>
+          <span class="patient-flag">{{ group.patients.length }} 位患者</span>
+        </button>
+        <div v-if="!categoryGroups.length" class="library-empty">暂无可访问的患者</div>
+      </template>
+      <template v-else>
+        <div class="category-heading">{{ selectedCategory || '未分类' }}</div>
+        <button
+          v-for="patient in visiblePatients"
+          :key="patient.id"
+          type="button"
+          class="patient-item"
+          :class="{ active: patient.id === selectedId }"
+          @click="selectPatient(patient.id)"
+          @contextmenu.prevent="openContextMenu($event, patient)"
+        >
+          <span class="patient-code">{{ patient.display_code }}</span>
+          <span class="patient-flag">{{ patient.current_snapshot_id ? '有快照' : '无快照' }}</span>
+        </button>
+        <div v-if="!visiblePatients.length" class="library-empty">该病种暂无患者</div>
+      </template>
     </div>
 
     <div
@@ -71,11 +118,29 @@
     </div>
 
     <div class="library-main">
-      <div v-if="!selected" class="library-placeholder">选择左侧患者查看病例库</div>
+      <div v-if="!selected" class="library-placeholder">
+        {{ selectedCategory === undefined ? '选择左侧病种查看患者' : '选择左侧患者查看病例库' }}
+      </div>
+      <div v-else-if="!library" class="library-placeholder">
+        {{ libraryError || '正在加载患者病例库...' }}
+      </div>
       <template v-else>
         <div class="detail-header">
           <div>
             <div class="detail-code">{{ library.patient.display_code }}</div>
+            <label class="detail-category">
+              病种
+              <input
+                v-model="categoryDraft"
+                list="patient-category-options"
+                maxlength="32"
+                :disabled="categorySaving || library.patient.owner_uid !== userStore.uid"
+                placeholder="选择或输入病种"
+                @change="updatePatientCategory"
+              />
+            </label>
+            <div v-if="categoryError" class="record-error">{{ categoryError }}</div>
+            <div v-if="libraryError" class="record-error">{{ libraryError }}</div>
             <div class="detail-sub">
               状态 {{ library.patient.status }} · 当前快照
               {{ library.snapshots.find((s) => s.is_current)?.sequence ?? '无' }}
@@ -201,23 +266,77 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { clinicalApi } from '@/apis/clinical_api'
 import RecordUploadModal from '@/components/RecordUploadModal.vue'
+import { useUserStore } from '@/stores/user'
 
+const userStore = useUserStore()
 const patients = ref([])
 const selectedId = ref('')
 const selected = ref(null)
 const library = ref(null)
 const loading = ref(false)
+const patientsError = ref('')
+const libraryError = ref('')
 const chunkPanel = ref({ visible: false, chunks: [] })
 const uploadVisible = ref(false)
+const selectedCategory = ref(undefined)
+const patientCategories = ['内膜癌', '宫颈癌', '卵巢癌']
+const categoryDraft = ref('')
+const categoryError = ref('')
+const categorySaving = ref(false)
+const categoryOptions = computed(() =>
+  [...new Set([...patientCategories, ...patients.value.map((patient) => patient.category).filter(Boolean)])]
+    .sort((left, right) => left.localeCompare(right, 'zh-CN'))
+)
+const categoryGroups = computed(() => {
+  const groups = new Map()
+  for (const patient of patients.value) {
+    const category = patient.category || null
+    if (!groups.has(category)) groups.set(category, [])
+    groups.get(category).push(patient)
+  }
+  return [...groups].map(([category, members]) => ({
+    key: category === null ? 'unclassified' : `category:${category}`,
+    category,
+    patients: members
+  })).sort((left, right) => {
+    if (left.category === null && right.category === null) return 0
+    if (left.category === null) return 1
+    if (right.category === null) return -1
+    return left.category.localeCompare(right.category, 'zh-CN')
+  })
+})
+const visiblePatients = computed(() =>
+  patients.value.filter((patient) => (patient.category || null) === selectedCategory.value)
+)
+
+/** 进入病种大类或返回分类首页。 */
+const selectCategory = (category) => {
+  selectedCategory.value = category
+  selectedId.value = ''
+  selected.value = null
+  library.value = null
+  libraryError.value = ''
+  categoryError.value = ''
+  createPanel.value.visible = false
+}
 
 const loadPatients = async () => {
   loading.value = true
+  patientsError.value = ''
   try {
-    patients.value = await clinicalApi.listPatients()
-    if (patients.value.length && !selectedId.value) selectPatient(patients.value[0].id)
+    patients.value = (await clinicalApi.listPatients()).sort((left, right) =>
+      left.display_code.localeCompare(right.display_code, 'zh-CN', { numeric: true })
+    )
+    if (selectedId.value) {
+      selected.value = patients.value.find((patient) => patient.id === selectedId.value) || null
+      if (selected.value) selectedCategory.value = selected.value.category || null
+      else selectCategory(undefined)
+    }
+  } catch (error) {
+    patientsError.value = error?.message || '患者列表加载失败'
   } finally {
     loading.value = false
   }
@@ -226,16 +345,26 @@ const loadPatients = async () => {
 const selectPatient = async (patientId) => {
   selectedId.value = patientId
   selected.value = patients.value.find((p) => p.id === patientId) || null
+  categoryDraft.value = selected.value?.category || ''
+  categoryError.value = ''
+  library.value = null
   await loadLibrary()
 }
 
 const loadLibrary = async () => {
-  if (!selectedId.value) return
-  library.value = await clinicalApi.getPatientLibrary(selectedId.value)
-  // 快照可能在本页之外(如会话上传)发布,详情拉取后同步列表徽标
-  const item = patients.value.find((p) => p.id === selectedId.value)
-  if (item && library.value.patient) {
-    item.current_snapshot_id = library.value.patient.current_snapshot_id
+  const patientId = selectedId.value
+  if (!patientId) return
+  libraryError.value = ''
+  try {
+    const nextLibrary = await clinicalApi.getPatientLibrary(patientId)
+    if (selectedId.value !== patientId) return
+    library.value = nextLibrary
+    categoryDraft.value = nextLibrary.patient.category || ''
+    // 快照可能在本页之外(如会话上传)发布,详情拉取后同步列表徽标
+    const item = patients.value.find((patient) => patient.id === patientId)
+    if (item) item.current_snapshot_id = nextLibrary.patient.current_snapshot_id
+  } catch (error) {
+    if (selectedId.value === patientId) libraryError.value = error?.message || '病例库加载失败'
   }
 }
 
@@ -245,26 +374,67 @@ const viewChunks = async (revisionId) => {
 }
 
 // 新增患者:编号可留空由服务端自动生成;创建后选中新患者
-const createPanel = ref({ visible: false, displayCode: '', creating: false, error: '' })
+const createPanel = ref({ visible: false, displayCode: '', category: '', creating: false, error: '' })
 
 const openCreate = () => {
-  createPanel.value = { visible: true, displayCode: '', creating: false, error: '' }
+  createPanel.value = {
+    visible: true,
+    displayCode: '',
+    category: typeof selectedCategory.value === 'string' ? selectedCategory.value : '',
+    creating: false,
+    error: ''
+  }
 }
 
 const createPatient = async () => {
+  if (!createPanel.value.category.trim() || createPanel.value.creating) return
   createPanel.value.creating = true
   createPanel.value.error = ''
   try {
     const patient = await clinicalApi.createPatient({
-      displayCode: createPanel.value.displayCode.trim() || null
+      displayCode: createPanel.value.displayCode.trim() || null,
+      category: createPanel.value.category.trim()
     })
     createPanel.value.visible = false
-    patients.value = [patient, ...patients.value]
-    selectPatient(patient.id)
+    patients.value = [...patients.value, patient].sort((left, right) =>
+      left.display_code.localeCompare(right.display_code, 'zh-CN', { numeric: true })
+    )
+    selectCategory(patient.category)
+    await selectPatient(patient.id)
   } catch (error) {
     createPanel.value.error = error?.response?.data?.detail || error?.message || '创建失败'
   } finally {
     createPanel.value.creating = false
+  }
+}
+
+const updatePatientCategory = async () => {
+  if (!selected.value || selected.value.owner_uid !== userStore.uid || categorySaving.value) return
+  const category = categoryDraft.value.trim()
+  if (!category) {
+    categoryError.value = '病种不能为空'
+    return
+  }
+  if (category === selected.value.category) return
+  const patientId = selected.value.id
+  categorySaving.value = true
+  categoryError.value = ''
+  try {
+    const updated = await clinicalApi.updatePatient(patientId, { category })
+    const item = patients.value.find((patient) => patient.id === patientId)
+    if (item) Object.assign(item, updated)
+    if (selectedId.value === patientId) {
+      if (library.value?.patient) Object.assign(library.value.patient, updated)
+      selectedCategory.value = updated.category
+      categoryDraft.value = updated.category
+    }
+  } catch (error) {
+    if (selectedId.value === patientId) {
+      categoryError.value = error?.response?.data?.detail || error?.message || '病种更新失败'
+      categoryDraft.value = selected.value.category || ''
+    }
+  } finally {
+    categorySaving.value = false
   }
 }
 
@@ -303,7 +473,6 @@ const deletePatient = async () => {
       library.value = null
     }
     patients.value = patients.value.filter((p) => p.id !== deleteConfirm.value.patient.id)
-    if (patients.value.length && !selectedId.value) selectPatient(patients.value[0].id)
   } catch (error) {
     deleteConfirm.value.error = error?.response?.data?.detail || error?.message || '删除失败'
   } finally {
@@ -356,6 +525,23 @@ loadPatients()
   color: var(--primary-color, #2563eb);
 }
 
+.category-back {
+  margin-bottom: 10px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--main-color);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.category-heading {
+  padding: 4px 10px 10px;
+  color: var(--color-text-secondary, inherit);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .create-panel {
   display: flex;
   flex-direction: column;
@@ -364,6 +550,24 @@ loadPatients()
   margin-bottom: 10px;
   border: 1px solid var(--primary-color, #2563eb);
   border-radius: 8px;
+}
+
+.category-label,
+.detail-category {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--color-text-secondary, inherit);
+  font-size: 12px;
+}
+
+.detail-category input {
+  min-width: 120px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-color, #e5e6eb);
+  border-radius: 6px;
+  background: var(--gray-0, transparent);
+  color: inherit;
 }
 
 .create-actions {
@@ -411,10 +615,12 @@ loadPatients()
   font-size: 12px;
 }
 
+.category-item,
 .patient-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   width: 100%;
   padding: 10px;
   margin-bottom: 6px;
@@ -425,18 +631,46 @@ loadPatients()
   cursor: pointer;
 }
 
+.category-item {
+  font-weight: 600;
+}
+
+.category-item span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.category-item:hover,
+.patient-item:hover {
+  border-color: var(--main-color);
+}
+
+.category-back:focus-visible,
+.category-item:focus-visible,
+.patient-item:focus-visible {
+  outline: 2px solid var(--main-color);
+  outline-offset: 2px;
+}
+
 .patient-item.active {
   border-color: var(--primary-color, #2563eb);
 }
 
 .patient-code {
+  min-width: 0;
+  overflow: hidden;
   font-weight: 600;
   font-family: monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .patient-flag {
   font-size: 11px;
   opacity: 0.65;
+  white-space: nowrap;
 }
 
 .library-empty,
@@ -458,6 +692,8 @@ loadPatients()
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
   margin-bottom: 16px;
 }
 

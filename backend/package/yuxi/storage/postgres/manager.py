@@ -23,7 +23,7 @@ from yuxi.utils import logger
 from yuxi.utils.singleton import SingletonMeta
 
 AGENT_RUN_TERMINAL_STATUS_SQL = ", ".join(f"'{status}'" for status in AGENT_RUN_TERMINAL_STATUSES)
-BUSINESS_SCHEMA_VERSION = 8
+BUSINESS_SCHEMA_VERSION = 10
 KNOWLEDGE_SCHEMA_VERSION = 4
 SCHEMA_VERSION_TABLE = "yuxi_schema_migrations"
 AGENT_RUN_LEASE_SCHEMA_STATEMENTS = (
@@ -965,6 +965,31 @@ class PostgresManager(metaclass=SingletonMeta):
             "ALTER TABLE IF EXISTS conversations ADD COLUMN IF NOT EXISTS last_viewed_run_id VARCHAR(64)",
             "ALTER TABLE IF EXISTS conversations ADD COLUMN IF NOT EXISTS patient_id VARCHAR(64)",
             CONVERSATION_PATIENT_FK_STATEMENT,
+            "ALTER TABLE IF EXISTS patients ADD COLUMN IF NOT EXISTS category VARCHAR(32)",
+            """
+            UPDATE patients
+            SET category = CASE
+                WHEN display_code LIKE '内膜癌%' THEN '内膜癌'
+                WHEN display_code LIKE '宫颈癌%' THEN '宫颈癌'
+                WHEN display_code LIKE '卵巢癌%' THEN '卵巢癌'
+                ELSE NULL
+            END
+            WHERE category IS NULL
+            """,
+            "ALTER TABLE IF EXISTS patients DROP CONSTRAINT IF EXISTS ck_patients_category",
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'ck_patients_category_text'
+                      AND conrelid = 'patients'::regclass
+                ) THEN
+                    ALTER TABLE patients ADD CONSTRAINT ck_patients_category_text
+                    CHECK (category IS NULL OR (category = TRIM(category) AND length(category) BETWEEN 1 AND 32));
+                END IF;
+            END $$
+            """,
             "ALTER TABLE IF EXISTS mcp_servers ADD COLUMN IF NOT EXISTS env JSONB",
             *AGENT_RUN_CURSOR_SCHEMA_STATEMENTS,
             """

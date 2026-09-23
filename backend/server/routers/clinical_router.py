@@ -41,6 +41,7 @@ class PatientCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     display_code: str | None = Field(None, max_length=64)
+    category: str = Field(..., min_length=1, max_length=32)
     identity_fingerprint: str | None = Field(None, max_length=128)
 
 
@@ -50,6 +51,7 @@ class PatientUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     display_code: str | None = Field(None, max_length=64)
+    category: str | None = Field(None, min_length=1, max_length=32)
     status: str | None = None
 
 
@@ -72,6 +74,7 @@ async def create_patient(
     return await patient_service.create_patient_view(
         current_uid=str(current_user.uid),
         display_code=payload.display_code,
+        category=payload.category,
         identity_fingerprint=payload.identity_fingerprint,
         db=db,
     )
@@ -103,6 +106,7 @@ async def update_patient(
         patient_id=patient_id,
         current_uid=str(current_user.uid),
         display_code=payload.display_code,
+        category=payload.category,
         status=payload.status,
         db=db,
     )

@@ -31,7 +31,7 @@ def test_patient_update_schema_forbids_identity_fields():
     """患者维护请求只允许脱敏展示字段,禁止携带身份与 Owner 字段。"""
     from server.routers.clinical_router import PatientUpdate
 
-    assert set(PatientUpdate.model_fields) == {"display_code", "status"}
+    assert set(PatientUpdate.model_fields) == {"display_code", "category", "status"}
     assert PatientUpdate.model_config.get("extra") == "forbid"
 
 

@@ -11,10 +11,24 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.repositories.patient_repository import PatientRepository, new_clinical_id
-from yuxi.storage.postgres.models_clinical import Encounter, Patient
+from yuxi.storage.postgres.models_clinical import PATIENT_CATEGORY_PREFIXES, Encounter, Patient
 
 _DISPLAY_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
 _MAX_DISPLAY_CODE_ATTEMPTS = 8
+
+
+def infer_patient_category(display_code: str | None) -> str | None:
+    """只从明确包含癌种名称的脱敏编号推断分类。"""
+    normalized_code = str(display_code or "").strip()
+    return next((category for category in PATIENT_CATEGORY_PREFIXES if normalized_code.startswith(category)), None)
+
+
+def normalize_patient_category(category: str) -> str:
+    """规范化病种名称并拒绝空白或过长输入。"""
+    normalized = category.strip()
+    if not normalized or len(normalized) > 32:
+        raise HTTPException(status_code=400, detail="患者病种不能为空且最多 32 字")
+    return normalized
 
 
 async def _generate_display_code(repo: PatientRepository) -> str:
@@ -30,10 +44,12 @@ async def create_patient_view(
     *,
     current_uid: str,
     display_code: str | None,
+    category: str | None = None,
     identity_fingerprint: str | None = None,
     db: AsyncSession,
 ) -> dict:
     """创建患者;创建者即 Owner。"""
+    category = normalize_patient_category(category) if category is not None else infer_patient_category(display_code)
     repo = PatientRepository(db)
     normalized_code = str(display_code or "").strip() or None
     if normalized_code:
@@ -45,6 +61,7 @@ async def create_patient_view(
         id=new_clinical_id(),
         owner_uid=str(current_uid),
         display_code=normalized_code,
+        category=category,
         status="active",
         identity_fingerprint=identity_fingerprint,
     )
@@ -72,10 +89,11 @@ async def update_patient_view(
     patient_id: str,
     current_uid: str,
     display_code: str | None = None,
+    category: str | None = None,
     status: str | None = None,
     db: AsyncSession,
 ) -> dict:
-    """更新脱敏编号或归档状态;仅 Owner 可操作,身份字段不可触碰。"""
+    """更新脱敏编号、分类或归档状态;仅 Owner 可操作,身份字段不可触碰。"""
     repo = PatientRepository(db)
     patient = await repo.get_accessible_active(patient_id, str(current_uid))
     if patient is None:
@@ -84,6 +102,8 @@ async def update_patient_view(
         raise HTTPException(status_code=403, detail="仅患者 Owner 可维护患者资料")
     if status is not None and status not in {"active", "archived"}:
         raise HTTPException(status_code=400, detail="status 仅支持 active/archived;删除走独立清理流程")
+    if category is not None:
+        category = normalize_patient_category(category)
     if display_code is not None:
         normalized_code = str(display_code).strip()
         if not normalized_code:
@@ -93,6 +113,8 @@ async def update_patient_view(
         patient.display_code = normalized_code
     if status is not None:
         patient.status = status
+    if category is not None:
+        patient.category = category
     await db.commit()
     return patient.to_dict()
 

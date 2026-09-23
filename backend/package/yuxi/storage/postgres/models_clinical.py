@@ -25,6 +25,8 @@ from yuxi.storage.postgres.models_business import JSON_VALUE, Base
 from yuxi.utils.datetime_utils import utc_now_naive
 
 PATIENT_STATUS_SQL = "status IN ('active', 'archived', 'deleted')"
+PATIENT_CATEGORY_PREFIXES = ("内膜癌", "宫颈癌", "卵巢癌")
+PATIENT_CATEGORY_SQL = "category IS NULL OR (category = TRIM(category) AND length(category) BETWEEN 1 AND 32)"
 
 PATIENT_BATCH_SOURCE_KINDS = ("thread_upload", "seed")
 PATIENT_BATCH_ACTIVE_STATUSES = (
@@ -49,7 +51,10 @@ class Patient(Base):
     """患者主记录;display_code 是 UI 可见的脱敏编号,不承载身份信息。"""
 
     __tablename__ = "patients"
-    __table_args__ = (CheckConstraint(PATIENT_STATUS_SQL, name="ck_patients_status"),)
+    __table_args__ = (
+        CheckConstraint(PATIENT_STATUS_SQL, name="ck_patients_status"),
+        CheckConstraint(PATIENT_CATEGORY_SQL, name="ck_patients_category_text"),
+    )
 
     id = Column(String(64), primary_key=True, comment="患者 UUID")
     owner_uid = Column(
@@ -60,6 +65,7 @@ class Patient(Base):
         comment="首期患者资源 Owner",
     )
     display_code = Column(String(64), nullable=False, unique=True, comment="UI 可见的脱敏编号")
+    category = Column(String(32), nullable=True, comment="患者癌种分类;未知历史记录为空")
     status = Column(String(20), nullable=False, default="active", server_default="active", index=True)
     identity_fingerprint = Column(
         String(128),
@@ -78,6 +84,7 @@ class Patient(Base):
             "id": self.id,
             "owner_uid": self.owner_uid,
             "display_code": self.display_code,
+            "category": self.category,
             "status": self.status,
             "has_identity_fingerprint": self.identity_fingerprint is not None,
             "current_snapshot_id": self.current_snapshot_id,

@@ -60,11 +60,11 @@ class PatientRepository:
         )
 
     async def list_accessible(self, uid: str, *, include_deleted: bool = False) -> list[Patient]:
-        """列出用户可访问的患者,按更新时间倒序。"""
+        """列出用户可访问的患者,按名称排序。"""
         stmt = select(Patient).where(self.accessibility_condition(uid))
         if not include_deleted:
             stmt = stmt.where(Patient.status != "deleted")
-        result = await self.db.execute(stmt.order_by(Patient.updated_at.desc(), Patient.id.desc()))
+        result = await self.db.execute(stmt.order_by(Patient.display_code.asc(), Patient.id.asc()))
         return list(result.scalars().all())
 
     async def display_code_exists(self, display_code: str) -> bool:

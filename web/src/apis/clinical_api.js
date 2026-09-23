@@ -1,4 +1,4 @@
-import { apiDelete, apiGet, apiPost } from './base'
+import { apiDelete, apiGet, apiPost, apiRequest } from './base'
 
 /**
  * ClinEvidence 患者域 API:患者、就诊与导入批次。
@@ -7,8 +7,17 @@ import { apiDelete, apiGet, apiPost } from './base'
 export const clinicalApi = {
   listPatients: () => apiGet('/api/clinical/patients'),
 
-  createPatient: ({ displayCode = null } = {}) =>
-    apiPost('/api/clinical/patients', displayCode ? { display_code: displayCode } : {}),
+  createPatient: ({ displayCode = null, category } = {}) =>
+    apiPost('/api/clinical/patients', {
+      ...(displayCode ? { display_code: displayCode } : {}),
+      category
+    }),
+
+  updatePatient: (patientId, payload) =>
+    apiRequest(`/api/clinical/patients/${patientId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
 
   listEncounters: (patientId) => apiGet(`/api/clinical/patients/${patientId}/encounters`),
 

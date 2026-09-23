@@ -156,7 +156,7 @@
               <div v-else-if="projectsError" class="list-state">项目加载失败，暂时无法分类对话</div>
               <template v-else>
                 <ConversationNavItem
-                  v-for="chat in otherConversations"
+                  v-for="chat in visibleRecentConversations"
                   :key="chat.id"
                   :chat="chat"
                   :current-chat-id="currentChatId"
@@ -165,6 +165,14 @@
                   @rename-chat="$emit('rename-chat', $event)"
                   @toggle-pin="$emit('toggle-pin', $event)"
                 />
+                <button
+                  v-if="hasMoreRecentConversations"
+                  type="button"
+                  class="recent-show-more"
+                  @click="showMoreRecentConversations"
+                >
+                  展开更多（{{ otherConversations.length - visibleRecentConversations.length }}）
+                </button>
                 <div v-if="!otherConversations.length" class="list-state">暂无对话历史</div>
               </template>
             </div>
@@ -231,7 +239,10 @@ const recentExpanded = ref(true)
 const expandedProjects = ref(new Set())
 const INITIAL_PROJECT_CONVERSATIONS = 5
 const PROJECT_CONVERSATIONS_STEP = 10
+const INITIAL_RECENT_CONVERSATIONS = 8
+const RECENT_CONVERSATIONS_STEP = 8
 const projectVisibleCounts = ref({})
+const recentVisibleCount = ref(INITIAL_RECENT_CONVERSATIONS)
 const groupedNavigation = computed(() =>
   buildProjectConversationGroups(props.projects, props.chatsList)
 )
@@ -247,10 +258,17 @@ const projectGroups = computed(() =>
   })
 )
 const otherConversations = computed(() => groupedNavigation.value.otherConversations)
+const visibleRecentConversations = computed(() => otherConversations.value.slice(0, recentVisibleCount.value))
+const hasMoreRecentConversations = computed(() => otherConversations.value.length > recentVisibleCount.value)
 
 /** 展开当前项目的下一批对话。 */
 function showMoreProjectConversations(group) {
   projectVisibleCounts.value[group.project.id] = group.visibleCount + PROJECT_CONVERSATIONS_STEP
+}
+
+/** 展开最近对话的下一批记录。 */
+function showMoreRecentConversations() {
+  recentVisibleCount.value += RECENT_CONVERSATIONS_STEP
 }
 
 const isProjectExpanded = (projectId) => expandedProjects.value.has(projectId)
@@ -479,6 +497,25 @@ const confirmDeleteProject = (project) => {
   text-align: left;
   &:hover {
     color: var(--gray-800);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--main-300);
+    outline-offset: -2px;
+  }
+}
+.recent-show-more {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--main-color);
+  cursor: pointer;
+  font-size: 12px;
+  text-align: center;
+  &:hover {
+    background: var(--gray-50);
   }
   &:focus-visible {
     outline: 2px solid var(--main-300);
