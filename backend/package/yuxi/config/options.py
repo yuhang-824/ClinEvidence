@@ -99,6 +99,12 @@ system_options = Option(
                 "default": "",
             },
             {
+                "key": "pdf_vision_model",
+                "label": "PDF 图示视觉模型",
+                "type": "model",
+                "default": "",
+            },
+            {
                 "key": "fast_model",
                 "label": "快速响应模型",
                 "type": "model",

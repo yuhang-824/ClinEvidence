@@ -87,6 +87,13 @@ _TASK_DEFINITIONS = {
             success_function="finish_rag_evaluation_task",
             failure_function="fail_rag_evaluation_task",
         ),
+        TaskDefinition(
+            "clinical_ragas_evaluation",
+            "yuxi.services.clinical_ragas_service",
+            "run_clinical_ragas_task",
+            success_function="finish_clinical_ragas_task",
+            failure_function="fail_clinical_ragas_task",
+        ),
     )
 }
 

@@ -82,6 +82,12 @@ const router = createRouter({
           name: 'PatientLibrary',
           component: () => import('../views/PatientLibraryView.vue'),
           meta: { requiresAuth: true }
+        },
+        {
+          path: 'evaluation',
+          name: 'ClinicalRagasEvaluation',
+          component: () => import('../views/ClinicalRagasEvaluationView.vue'),
+          meta: { requiresAuth: true }
         }
       ]
     },

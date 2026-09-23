@@ -93,6 +93,35 @@ class Patient(Base):
         }
 
 
+class ClinicalRagasDataset(Base):
+    """保存用户上传的患者问答评估题与来源信息。"""
+
+    __tablename__ = "clinical_ragas_datasets"
+
+    id = Column(String(64), primary_key=True)
+    owner_uid = Column(String(64), ForeignKey("users.uid", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    items = Column(JSON_VALUE, nullable=False)
+    created_at = Column(DateTime, default=utc_now_naive, server_default=func.now(), nullable=False)
+
+
+class ClinicalRagasRun(Base):
+    """保存一次真实 AgentRun 批量评估的配置、进度和逐题结果。"""
+
+    __tablename__ = "clinical_ragas_runs"
+
+    id = Column(String(64), primary_key=True)
+    owner_uid = Column(String(64), ForeignKey("users.uid", ondelete="CASCADE"), nullable=False, index=True)
+    dataset_id = Column(String(64), ForeignKey("clinical_ragas_datasets.id", ondelete="RESTRICT"), nullable=False)
+    status = Column(String(20), nullable=False, default="pending")
+    config = Column(JSON_VALUE, nullable=False)
+    results = Column(JSON_VALUE, nullable=False, default=list)
+    task_id = Column(String(64), nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive, server_default=func.now(), nullable=False)
+    finished_at = Column(DateTime, nullable=True)
+
+
 class PatientAccessGrant(Base):
     """患者协作授权;可见性查询必须以 Owner 或有效 grant 为条件。"""
 

@@ -9,6 +9,7 @@
               <span class="evaluation-section-count">{{ datasets.length }}</span>
             </div>
             <p>管理评估题目与标准答案，选择基准后可查看题目和关联测试。</p>
+            <router-link to="/patients/evaluation">患者病例问答 RAGAS 测评 →</router-link>
           </div>
 
           <a-dropdown v-if="canManage" :trigger="['click']" placement="bottomRight">

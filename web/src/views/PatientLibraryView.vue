@@ -6,6 +6,7 @@
     <div class="library-side">
       <div class="library-side-header">
         <div class="library-side-title">患者库</div>
+        <router-link to="/patients/evaluation" class="record-secondary" title="患者问答 RAGAS 测评">测评</router-link>
         <button class="add-patient-btn" title="新增患者" @click="openCreate">＋</button>
       </div>
       <button

@@ -13,6 +13,7 @@ from server.routers.external_kb_router import external_kb
 from server.routers.filesystem_router import filesystem_router
 from server.routers.knowledge_dashboard_router import knowledge_dashboard
 from server.routers.knowledge_eval_router import evaluation
+from server.routers.clinical_ragas_router import clinical_ragas
 from server.routers.knowledge_router import knowledge
 from server.routers.mcp_router import mcp
 from server.routers.mention_router import mention_router
@@ -58,4 +59,5 @@ router.include_router(knowledge_dashboard)  # /api/dashboard/stats/knowledge 知
 router.include_router(external_kb)  # /api/knowledge/databases/external* CLI 与外部 Agent 调用
 router.include_router(knowledge)  # /api/knowledge/* 知识库管理与检索
 router.include_router(evaluation)  # /api/evaluation/* 知识库评估
+router.include_router(clinical_ragas)  # /api/clinical/evaluation/* 患者问答 RAGAS
 router.include_router(workspace_knowledge)  # /api/workspace/knowledge/* 工作区知识文件只读视图
