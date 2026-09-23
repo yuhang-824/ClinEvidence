@@ -358,6 +358,8 @@ export class MessageProcessor {
           normalizedChunks.push({
             chunk_id: chunk.chunk_id || '',
             content,
+            document_id: typeof chunk.document_id === 'string' ? chunk.document_id : '',
+            document_name: typeof chunk.document_name === 'string' ? chunk.document_name : '',
             document_type: chunk.document_type || '',
             page_number: chunk.page_number,
             snapshot_id: chunk.snapshot_id || '',

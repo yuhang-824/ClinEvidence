@@ -187,3 +187,50 @@ test('History 按 Run ID 分组，保留零消息 Run、续写和无关联旧消
   assert.equal(groups[0].messages[0].id, 'old')
   assert.equal(history[2].isLast, undefined)
 })
+
+
+test('患者病历来源提取保留文档名、相似度并去重', () => {
+  const conv = {
+    messages: [
+      {
+        type: 'ai',
+        tool_calls: [
+          {
+            name: 'search_patient_records',
+            tool_call_result: {
+              content: JSON.stringify([
+                {
+                  chunk_id: 'chunk-1',
+                  content: '术后病理回报',
+                  document_id: 'doc-1',
+                  document_name: '宫颈癌1_病程记录',
+                  document_type: 'medical_record',
+                  page_number: 22,
+                  score: 0.939,
+                  snapshot_id: 'snap-1',
+                  snapshot_sequence: 1
+                },
+                {
+                  chunk_id: 'chunk-1',
+                  content: '术后病理回报',
+                  document_name: '宫颈癌1_病程记录',
+                  score: 0.939
+                },
+                { chunk_id: 'chunk-2', content: '出院医嘱', document_name: '', score: '0.5' }
+              ])
+            }
+          }
+        ]
+      }
+    ]
+  }
+  const chunks = MessageProcessor.extractPatientChunksFromConversation(conv)
+  assert.equal(chunks.length, 2)
+  assert.equal(chunks[0].document_name, '宫颈癌1_病程记录')
+  assert.equal(chunks[0].document_id, 'doc-1')
+  assert.equal(chunks[0].score, 0.939)
+  assert.equal(chunks[0].snapshot_sequence, 1)
+  assert.equal(chunks[1].document_name, '')
+  assert.equal(chunks[1].document_id, '')
+  assert.equal(chunks[1].score, null)
+})

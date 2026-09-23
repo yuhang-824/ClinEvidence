@@ -3416,7 +3416,9 @@ const handleSendMessage = async ({ image, queuePolicy = 'enqueue' } = {}) => {
         try {
           const generatedTitle = await agentApi.generateTitle(
             autoTitle,
-            configStore.config?.fast_model
+            // 标题生成跟随本次会话选择的模型;fast_model 是平台级旁路配置,
+            // 会让 MiniMax 会话静默调用另一个本地模型,医生会困惑来源
+            modelSpec
           )
           if (generatedTitle) {
             const finalTitle = generatedTitle.slice(0, 30).replace(/\s+/g, ' ').trim()
