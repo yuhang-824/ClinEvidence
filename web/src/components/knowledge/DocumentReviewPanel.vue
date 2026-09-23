@@ -266,8 +266,12 @@ async function saveStructure(structure) {
     )
     await nextTick()
     structureEditor.value?.rebaseline?.()
-    structureEditor.value?.goToNextUnreviewedPage?.(fromPage)
-    message.success('结构修订与逐页核验已保存，批准前请完成全部页面核验')
+    const nextPage = structureEditor.value?.goToNextPage?.(fromPage)
+    message.success(
+      nextPage === null
+        ? '结构修订与逐页核验已保存，已到最后一页'
+        : '结构修订与逐页核验已保存，批准前请完成全部页面核验'
+    )
   } catch (e) {
     actionError.value = e.message || '保存失败，修订内容已保留'
   } finally {

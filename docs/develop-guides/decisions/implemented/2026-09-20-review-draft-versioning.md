@@ -4,6 +4,8 @@
 类型：simplification
 Owner：backend/package/yuxi/repositories/document_review_repository.py
 
+逐页导航部分已由[保存后顺序进入下一页](./2026-09-23-structure-review-save-navigation.md)取代；下文相关测试结果仅记录当时的验证。
+
 ## 问题
 
 逐页结构审核中每次"保存结构修订"都会生成一个新审核版本，一份 11 页文档审核完成产生 25 个版本：版本列表被同一次审核的中间态淹没，且前端以版本号为编辑器重建 key，每次保存后视图跳回第 1 页，审核者必须手动翻回未核验的页。

@@ -26,6 +26,18 @@
               </div>
             </div>
           </div>
+          <div class="setting-row">
+            <div class="col-item">
+              <div class="setting-label">{{ items?.pdf_vision_model?.des || 'PDF 图示视觉模型' }}</div>
+              <div class="setting-content">
+                <ModelSelectorComponent
+                  @select-model="handleVisionModelSelect"
+                  :model_spec="configStore.config?.pdf_vision_model"
+                  placeholder="请选择支持图片输入的模型"
+                />
+              </div>
+            </div>
+          </div>
           <div class="setting-row two-cols">
             <div class="col-item">
               <div class="setting-label">{{ items?.embed_model?.des }}</div>
@@ -132,6 +144,12 @@ const handleChatModelSelect = (spec) => {
 const handleFastModelSelect = (spec) => {
   if (typeof spec === 'string' && spec) {
     configStore.setConfigValue('fast_model', spec)
+  }
+}
+
+const handleVisionModelSelect = (spec) => {
+  if (typeof spec === 'string' && spec) {
+    configStore.setConfigValue('pdf_vision_model', spec)
   }
 }
 

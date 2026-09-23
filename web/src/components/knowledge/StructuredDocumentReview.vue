@@ -14,9 +14,15 @@
       对照原页检查顺序、遗漏与对应关系。表格保留完整行和表头；图示请写清条件、分支、动作及去向。修改后重新核验本页。
       解析器证据充分的页已由系统机器核验，只需处理被标记的页；勾选核验项或填写页面说明即可用人工核验覆盖机器结论。
     </p>
+    <a-alert
+      v-if="visionBlocks.length && visionGeneratedCount < visionBlocks.length"
+      :message="`待审核图示自动转写 ${visionGeneratedCount}/${visionBlocks.length} 块；其余需对照原页补录或排除`"
+      type="warning"
+      show-icon
+    />
     <a-alert v-if="error" :message="error" type="error" show-icon />
     <div class="structure-columns">
-      <section class="page-view">
+      <section ref="pageView" class="page-view">
         <a-spin v-if="loading" tip="正在读取原页..." />
         <div v-else-if="imageUrl" class="page-image">
           <img :src="imageUrl" :alt="`源 PDF 第 ${pageNumber} 页`" />
@@ -24,7 +30,7 @@
         </div>
         <a-button v-else @click="loadPage">重新加载原页</a-button>
       </section>
-      <section class="block-list">
+      <section ref="blockList" class="block-list">
         <p v-if="currentPage.auto_review" class="auto-review">
           机器核验：{{ autoReviewLabel(currentPage.auto_review) }}，如需人工复核请勾选下方核验项
         </p>
@@ -73,6 +79,45 @@
           <details>
             <summary>原始解析文字（保留不覆盖）</summary>
             <pre>{{ originalBlock(block.id)?.source_text || '人工补录' }}</pre>
+          </details>
+          <details v-if="originalBlock(block.id)?.vision_graph">
+            <summary>视觉模型识别的节点与箭头（请对照原图核对）</summary>
+            <p v-if="originalBlock(block.id).vision_graph.title">
+              标题：{{ originalBlock(block.id).vision_graph.title }}
+            </p>
+            <p
+              v-for="node in originalBlock(block.id).vision_graph.nodes"
+              :key="node.id"
+            >
+              节点 {{ node.id }}（{{ node.kind }}）：{{ node.text }}
+            </p>
+            <p
+              v-for="(edge, edgeIndex) in originalBlock(block.id).vision_graph.edges"
+              :key="edgeIndex"
+            >
+              箭头 {{ edge.from }} → {{ edge.to }}{{ edge.condition ? ` · 条件：${edge.condition}` : '' }}{{ edge.relation !== 'sequence' ? ` · 关系：${edge.relation}` : '' }}
+            </p>
+            <p
+              v-for="(note, noteIndex) in originalBlock(block.id).vision_graph.footnotes"
+              :key="noteIndex"
+            >
+              脚注 {{ note.marker }}：{{ note.text }}
+            </p>
+            <p
+              v-for="(uncertainty, uncertaintyIndex) in originalBlock(block.id).vision_graph.uncertainties"
+              :key="uncertaintyIndex"
+            >
+              待核对：{{ uncertainty }}
+            </p>
+          </details>
+          <details v-if="originalBlock(block.id)?.vision_raw_response !== undefined">
+            <summary>视觉模型原始回复（结构解析失败时可在此核对）</summary>
+            <p>
+              模型：{{ originalBlock(block.id).vision_model_spec }}；结束原因：{{ originalBlock(block.id).vision_finish_reason || '未提供' }}；
+              输入 {{ originalBlock(block.id).vision_usage?.input_tokens ?? '未知' }} / 输出 {{ originalBlock(block.id).vision_usage?.output_tokens ?? '未知' }} tokens
+            </p>
+            <p v-if="originalBlock(block.id).vision_response_truncated">回复超过保存上限，仅展示前 100000 字符。</p>
+            <pre>{{ originalBlock(block.id).vision_raw_response || '模型未返回正文' }}</pre>
           </details>
           <a-textarea
             :value="block.text"
@@ -128,6 +173,12 @@ const props = defineProps({
   editable: Boolean
 })
 const emit = defineEmits(['save', 'dirty-change'])
+const visionBlocks = computed(() =>
+  props.structure.blocks.filter(
+    (block) => block.kind === 'relationship' && block.source_label === 'image' && !block.excluded
+  )
+)
+const visionGeneratedCount = computed(() => visionBlocks.value.filter((block) => block.vision_graph).length)
 const blocks = ref(
   props.structure.blocks.map(({ id, page, text, kind, level, excluded, note }) => ({
     id,
@@ -144,6 +195,8 @@ const pages = ref(
 )
 const pageNumber = ref(1)
 const selected = ref(null)
+const pageView = ref(null)
+const blockList = ref(null)
 async function locateBlock(id) {
   const block = originalBlock(id)
   if (!block) return
@@ -162,6 +215,7 @@ function validate(scope = 'save') {
   for (const block of blocks.value) {
     const index = (perPageIndex.get(block.page) || 0) + 1
     perPageIndex.set(block.page, index)
+    if (scope === 'save' && block.page !== pageNumber.value) continue
     const label = `第 ${block.page} 页文块 ${index}`
     if (block.excluded && !block.note.trim()) {
       problems.push(`${label} 已勾选「不参与检索」，请填写文块修订或排除说明`)
@@ -200,29 +254,19 @@ function requestSave() {
   error.value = ''
   emit('save', payload.value)
 }
-defineExpose({ locateBlock, validate, getCurrentPage, goToNextUnreviewedPage, rebaseline })
+defineExpose({ locateBlock, validate, getCurrentPage, goToNextPage, rebaseline })
 
 function getCurrentPage() {
   return pageNumber.value
 }
 
-// 保存后从当前页起找第一张仍待人工核验的页（环形），让逐页审核不必手动翻回
-function goToNextUnreviewedPage(fromPage) {
+// 保存成功后按原文页序继续审核，即使下一页已有机器或人工核验结果
+function goToNextPage(fromPage) {
   const ordered = [...pages.value].sort((a, b) => a.page - b.page)
-  if (!ordered.length) return null
-  const start = Math.max(
-    0,
-    ordered.findIndex((p) => p.page === fromPage)
-  )
-  for (let step = 0; step < ordered.length; step++) {
-    const candidate = ordered[(start + step) % ordered.length]
-    if (!isVerified(candidate)) {
-      pageNumber.value = candidate.page
-      return candidate.page
-    }
-  }
-  pageNumber.value = ordered[start]?.page ?? pageNumber.value
-  return null
+  const next = ordered[ordered.findIndex((p) => p.page === fromPage) + 1]
+  if (!next) return null
+  pageNumber.value = next.page
+  return next.page
 }
 const imageUrl = ref('')
 const loading = ref(false)
@@ -344,6 +388,8 @@ function addBlock() {
 }
 async function loadPage() {
   const id = ++requestId
+  if (pageView.value) pageView.value.scrollTop = 0
+  if (blockList.value) blockList.value.scrollTop = 0
   loading.value = true
   error.value = ''
   selected.value = null

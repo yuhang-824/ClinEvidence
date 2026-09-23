@@ -189,6 +189,16 @@ async def parse_knowledge_document(source, params, *, kb_id, file_id):
             if not structure["pages"]:
                 raise ValueError("MinerU 未返回页面结构，无法进行结构审核，请稍后重试或改用本地引擎")
             structure["parser_version"] = artifact.get("model_version", "unknown")
+            if any(block["kind"] == "relationship" and block.get("source_label") == "image" for block in structure["blocks"]):
+                from yuxi.knowledge.parser.flowchart_vision import enrich_mineru_flowcharts
+                from yuxi.repositories.knowledge_base_repository import KnowledgeBaseRepository
+
+                kb = await KnowledgeBaseRepository().get_by_kb_id(kb_id)
+                options = await system_options.get()
+                model_spec = options["pdf_vision_model"] or (kb.llm_model_spec if kb else None) or options["default_model"]
+                if not model_spec:
+                    raise ValueError("MinerU 发现图示，请先配置支持图片输入的 PDF 图示视觉模型或对话模型")
+                await enrich_mineru_flowcharts(structure, artifact.get("origin_pdf") or data, model_spec)
             if artifact.get("origin_pdf"):
 
                 def _coverage() -> None:

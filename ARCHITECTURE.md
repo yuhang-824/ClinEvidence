@@ -41,6 +41,7 @@ ClinEvidence 交付本地文档知识能力路径；`external_kb` 是供 Agent/C
 - `agents` 定义 LangGraph 智能体体系。`BaseAgent` 是智能体基类，`BaseContext` 是运行上下文；`buildin/chatbot` 放单 Agent 后端；`middlewares` 组合文件系统、Skills、摘要、审批、模型兼容和用量统计；`toolkits` 管理本地工具；`backends` 对接沙盒、知识库和 Skills 文件系统；`skills` 与 `mcp` 管理扩展能力及其运行时加载。
 - `workspace` 是持久化 UserWorkspace Owner。`paths.py` 拥有 uid、宿主根和数据库 `projects/<managed-name>` 映射，`filesystem.py` 拥有 no-follow 文件原语，`workdir.py` 提供以一个 Project 为根的持久化视图，`preview.py` 拥有 UserWorkspace 文件预览和 runtime 本地 Office 缓存。Agent Backend 单独拥有 `/home/gem/...` runtime 路径。
 - `services` 是用例层。智能体主链路重点分为请求接入与排队、Run 生命周期、运行时配置、worker 执行；聊天历史、附件、工作区、文件预览、评估、认证和观测等跨模块流程也从这里找入口。
+- 患者问答 RAGAS 评估由 `clinical_ragas_service` 从人工测试集创建独立患者绑定 Conversation，复用普通 AgentRun/worker 产生回答，从同一 Run 的 Tool 审计提取病例与知识库证据；Durable Task 保存逐题结果，用户在患者库测评页选择评判聊天模型和向量模型查看四项 RAGAS 指标。知识库评估继续由 `knowledge/eval` 拥有。
 - `repositories` 是 PostgreSQL 访问边界，封装业务对象、知识库元数据、AgentRun、请求队列、Task 和扩展配置查询。路由不应绕过 repository 直接拼装持久化逻辑。
 - `storage/postgres` 管理 SQLAlchemy 模型、业务连接池和 LangGraph checkpoint 连接池。
 - `storage/redis` 管理同步/异步 Redis 客户端和 ARQ 连接参数；业务 key、事件格式和缓存语义留在各自服务中。

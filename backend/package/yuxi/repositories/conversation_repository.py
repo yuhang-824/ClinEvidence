@@ -38,7 +38,7 @@ MESSAGE_SEARCH_EXCLUDED_TYPES = (
     MODEL_AUDIT_MESSAGE_TYPE,
     TOOL_AUDIT_MESSAGE_TYPE,
 )
-INVOCATION_CONVERSATION_SOURCES = ("agent_call", "agent_evaluation")
+INVOCATION_CONVERSATION_SOURCES = ("agent_call", "agent_evaluation", "clinical_ragas")
 
 # ==== 历史对话检索参数 ====
 MEMORY_HISTORY_SEARCH_MAX_LIMIT = 10  # 单次历史搜索最多返回的消息条数。

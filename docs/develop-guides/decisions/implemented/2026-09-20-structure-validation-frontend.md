@@ -4,6 +4,8 @@
 类型：bug-fix
 Owner：web/src/components/knowledge/StructuredDocumentReview.vue
 
+历史空文块的逐页保存规则已由[草稿渐进核验](./2026-09-23-legacy-empty-block-review-progress.md)调整；下文全篇保存前校验的描述和测试结果仅记录当时行为。
+
 ## 问题
 
 在逐页结构审核勾选"不参与检索"但未填写"文块修订或排除说明"时保存，后端按契约拒绝并返回具体原因（如"排除文块必须说明原因，原文仍会保留"），但前端错误边界把 400 统一替换为"请求参数错误"（`web/src/apis/base.js` 的公开错误契约，防止服务端任意响应上下文进入前端消息与日志），用户不知道该改什么，审核入库流程被阻塞。

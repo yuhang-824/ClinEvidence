@@ -39,13 +39,15 @@ PLACEHOLDER_PREFIXES = ("[空结构块", "[表格", "[图示")
 EMPTY_BLOCK_EXCLUDED_NOTE = "解析器未取到该区域文字，已排除；原页如有内容请补充后取消排除"
 
 
-def compose_structure(structure):
-    """按审核顺序生成唯一正文，同时保留块和页的字符位置。"""
+def compose_structure(structure, *, allow_incomplete=False):
+    """按审核顺序生成正文与来源位置；草稿可暂留历史空块与占位块。"""
     parts, spans, pages, offset = [], [], {}, 0
     for block in structure["blocks"]:
         if block.get("excluded"):
             continue
         text = block["text"].strip()
+        if allow_incomplete and (not text or is_placeholder_text(text)):
+            continue
         if not text:
             raise ValueError("非排除文块不能为空，请补充原文或注明排除原因")
         if block["kind"] == "heading":
@@ -70,9 +72,9 @@ def compose_structure(structure):
     return "\n\n".join(parts), spans, list(pages.values())
 
 
-def structure_report(structure, prior=None):
+def structure_report(structure, prior=None, *, allow_incomplete=False):
     """使审核稿和来源映射来自同一份结构数据。"""
-    content, spans, pages = compose_structure(structure)
+    content, spans, pages = compose_structure(structure, allow_incomplete=allow_incomplete)
     report = {**(prior or {}), "structure": structure, "block_spans": spans, "page_spans": pages}
     report.pop("chunk_boundaries", None)
     report.setdefault("changes", [])
@@ -212,8 +214,6 @@ def revise_structure(original, payload, operator, timestamp):
             raise ValueError("标题层级必须为 1 到 6")
         if excluded and not note.strip():
             raise ValueError("排除文块必须说明原因，原文仍会保留")
-        if not excluded and is_placeholder_text(text):
-            raise ValueError("占位文块没有正文，请补充原文或勾选不参与检索")
         # 与解析器产出对比时使用同一套默认值，缺字段不等于被人改过
         unchanged = (
             block.get("text"),
@@ -228,6 +228,11 @@ def revise_structure(original, payload, operator, timestamp):
             level,
             excluded,
         )
+        # 旧稿的空块或占位块可暂留；新建或修改该块时必须补正文或明确排除
+        if not excluded and not text.strip() and not unchanged:
+            raise ValueError("非排除文块不能为空，请补充原文或注明排除原因")
+        if not excluded and is_placeholder_text(text) and not unchanged:
+            raise ValueError("占位文块没有正文，请补充原文或勾选不参与检索")
         if block_id not in source or not unchanged:
             touched.add(page)
         block.update(text=text, note=note, kind=kind, level=level, excluded=excluded)

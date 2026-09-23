@@ -151,7 +151,7 @@ class DocumentReviewRepository:
                     if structure is None:
                         raise ReviewConflict("请在逐页结构审核中修订，避免丢失原页来源")
                     revised = revise_structure(latest.report["structure"], structure, operator, utc_now().isoformat())
-                    content, report = structure_report(revised, latest.report)
+                    content, report = structure_report(revised, latest.report, allow_incomplete=True)
                 elif structure is not None:
                     raise ReviewConflict("此版本没有结构数据，请重新解析 PDF")
 
