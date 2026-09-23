@@ -90,7 +90,7 @@ def validate(data_dir: Path) -> int:
     return 0
 
 
-async def _seed(data_dir: Path, operator_uid: str, limit: int | None) -> int:
+async def _seed(data_dir: Path, operator_uid: str, limit: int | None, patients_filter: list[str] | None) -> int:
     """按患者分组创建导入批次;真实解析与发布由 Durable Task worker 完成。"""
     from dotenv import load_dotenv
 
@@ -109,6 +109,11 @@ async def _seed(data_dir: Path, operator_uid: str, limit: int | None) -> int:
 
     pg_manager.initialize()
     patients = sorted(files_by_patient)
+    if patients_filter:
+        unknown = [key for key in patients_filter if key not in files_by_patient]
+        if unknown:
+            raise SystemExit(f"预检失败:清单外的患者键: {unknown}")
+        patients = sorted(set(patients_filter))
     if limit:
         patients = patients[:limit]
     failures: list[str] = []
@@ -144,6 +149,11 @@ def main() -> None:
     parser.add_argument("--data-dir", required=True, help="装机材料与源文件目录")
     parser.add_argument("--operator-uid", help="种子操作员 UID(需在 YUXI_SEED_OPERATOR_UIDS 白名单)")
     parser.add_argument("--limit", type=int, default=None, help="仅导入前 N 名患者(演练用)")
+    parser.add_argument(
+        "--patients",
+        default="",
+        help="逗号分隔的患者键过滤;为空导入全部(评测装机按 RAGAS 清单过滤)",
+    )
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -151,7 +161,8 @@ def main() -> None:
         raise SystemExit(validate(data_dir))
     if not args.operator_uid:
         raise SystemExit("seed 需要 --operator-uid")
-    raise SystemExit(asyncio.run(_seed(data_dir, args.operator_uid, args.limit)))
+    patients_filter = [key.strip() for key in args.patients.split(",") if key.strip()] or None
+    raise SystemExit(asyncio.run(_seed(data_dir, args.operator_uid, args.limit, patients_filter)))
 
 
 if __name__ == "__main__":
