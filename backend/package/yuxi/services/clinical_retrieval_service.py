@@ -4,6 +4,7 @@
 不参与过滤。检索命中必须回读 PostgreSQL 并再次校验快照成员后才能作为证据。
 """
 
+import math
 import os
 
 from fastapi import HTTPException
@@ -14,6 +15,7 @@ from yuxi.repositories.conversation_repository import ConversationRepository
 from yuxi.storage.postgres.models_clinical import (
     Patient,
     PatientChunk,
+    PatientDocument,
     PatientDocumentRevision,
     PatientSnapshot,
     PatientSnapshotMember,
@@ -91,7 +93,13 @@ async def get_patient_context_view(db: AsyncSession, *, thread_id: str, uid: str
 
 
 async def _embed_query(query_text: str) -> list[float]:
-    """按部署配置的 embedding 规格编码查询;写入与查询共用同一模型。"""
+    """按部署配置的 embedding 规格编码查询并 L2 归一化。
+
+    写入(index_revision_chunks)与查询共用本函数;两侧向量均为单位范数时
+    Milvus IP 分数才严格等于余弦相似度,前端相似度百分比依赖该前提。
+    归一化幂等:历史向量若由本函数写入则已归一化;若有更早的未归一化存量,
+    需重跑 index_revision_chunks 重索引后相似度口径才一致。
+    """
     spec = os.environ.get(PATIENT_EMBEDDING_SPEC_ENV, "")
     if not spec:
         raise HTTPException(
@@ -102,7 +110,11 @@ async def _embed_query(query_text: str) -> list[float]:
 
     model = select_embedding_model(spec)
     vectors = await model.abatch_encode([query_text], batch_size=1)
-    return list(vectors[0])
+    vector = [float(value) for value in vectors[0]]
+    norm = math.sqrt(sum(value * value for value in vector))
+    if norm == 0:
+        raise HTTPException(status_code=503, detail="embedding 返回零向量,患者检索不可用")
+    return [value / norm for value in vector]
 
 
 async def search_patient_records_view(
@@ -180,7 +192,10 @@ async def verify_patient_citation(
 
 
 async def _hydrate_chunks(db: AsyncSession, scope: dict, hits: list[dict], *, document_types) -> list[dict]:
-    """按 chunk_id 回读 PG 内容并再次校验患者、版本与修订成员;越界命中丢弃并告警。"""
+    """按 chunk_id 回读 PG 内容并再次校验患者、版本与修订成员;越界命中丢弃并告警。
+
+    document_name 取逻辑文档 logical_key,供前端按病历文件分组展示来源。
+    """
     from yuxi.utils.logging_config import logger
 
     member_keys = {
@@ -214,4 +229,13 @@ async def _hydrate_chunks(db: AsyncSession, scope: dict, hits: list[dict], *, do
                 "snapshot_sequence": scope["snapshot"].sequence,
             }
         )
+    document_names = {}
+    document_ids = {item["document_id"] for item in hydrated}
+    if document_ids:
+        rows = await db.execute(
+            select(PatientDocument.id, PatientDocument.logical_key).where(PatientDocument.id.in_(document_ids))
+        )
+        document_names = dict(rows.all())
+    for item in hydrated:
+        item["document_name"] = document_names.get(item["document_id"])
     return hydrated

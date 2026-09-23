@@ -119,8 +119,9 @@ async def search_patient_records(
     3. 按文书类型缩小范围,如只看病理报告
 
     返回结果:
-    命中文块列表,含 content(原文内容)、document_type(文书类型)、
-    page_number(页码)、chunk_id(证据 ID,可用于 read_evidence_excerpt 回读)、
+    命中文块列表,含 content(原文内容)、document_name(所属病历文件)、
+    document_type(文书类型)、page_number(页码)、score(向量相似度)、
+    chunk_id(证据 ID,可用于 read_evidence_excerpt 回读)、
     snapshot_id(证据所属快照)。
 
     使用规范:

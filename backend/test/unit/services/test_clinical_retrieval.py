@@ -146,6 +146,33 @@ async def test_citation_verification_rejects_forged_chunks(session):
     assert set(result["rejected"]) == {"chunk-out", "forged"}
 
 
+class _FakeEmbedModel:
+    def __init__(self, vector):
+        self._vector = vector
+
+    async def abatch_encode(self, texts, batch_size=1):
+        return [list(self._vector)]
+
+
+async def test_embed_query_l2_normalizes(monkeypatch):
+    monkeypatch.setenv(clinical_retrieval_service.PATIENT_EMBEDDING_SPEC_ENV, "fake:model")
+    import yuxi.models.embed as embed_module
+
+    monkeypatch.setattr(embed_module, "select_embedding_model", lambda spec: _FakeEmbedModel([3.0, 4.0]))
+    vector = await clinical_retrieval_service._embed_query("症状")
+    assert vector == [0.6, 0.8]
+
+
+async def test_embed_query_rejects_zero_vector(monkeypatch):
+    monkeypatch.setenv(clinical_retrieval_service.PATIENT_EMBEDDING_SPEC_ENV, "fake:model")
+    import yuxi.models.embed as embed_module
+
+    monkeypatch.setattr(embed_module, "select_embedding_model", lambda spec: _FakeEmbedModel([0.0, 0.0]))
+    with pytest.raises(HTTPException) as exc:
+        await clinical_retrieval_service._embed_query("症状")
+    assert exc.value.status_code == 503
+
+
 async def test_search_drops_cross_patient_and_out_of_snapshot_hits(session, monkeypatch):
     await _seed_world(session)
 
@@ -166,6 +193,8 @@ async def test_search_drops_cross_patient_and_out_of_snapshot_hits(session, monk
 
     hits = await search_patient_records_view(session, thread_id="thread-a", uid="doctor-1", query_text="症状")
     assert [hit["chunk_id"] for hit in hits] == ["chunk-in"]
+    assert hits[0]["document_name"] == "k1"
+    assert hits[0]["score"] == 0.9
 
 
 async def test_clinical_tool_schemas_expose_no_scope_parameters():
