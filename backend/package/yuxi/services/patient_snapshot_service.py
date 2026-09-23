@@ -449,6 +449,7 @@ async def index_revision_chunks(*, revision_id: str, current_uid: str, db: Async
                 "index_generation": 1,
                 "document_type": chunk.document_type,
                 "embedding": embedding,
+                "content": chunk.content,
             }
             for chunk, embedding in zip(chunks, embeddings, strict=True)
         ]

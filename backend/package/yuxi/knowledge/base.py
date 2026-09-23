@@ -641,6 +641,11 @@ class KnowledgeBase(ABC):
             if chunk.get("rerank_score") is not None:
                 # 重排分要跟着结果走：调用方据此比较向量顺序与重排顺序，判断是否需要重排模型
                 metadata.setdefault("rerank_score", chunk.get("rerank_score"))
+            if chunk.get("rrf_score") is not None:
+                # RRF 融合分只表达多路共识排序,不是相似度;前端据此区分排序口径
+                metadata.setdefault("rrf_score", chunk.get("rrf_score"))
+            if chunk.get("bm25_score") is not None:
+                metadata.setdefault("bm25_score", chunk.get("bm25_score"))
             if chunk.get("distance") is not None:
                 metadata.setdefault("distance", chunk.get("distance"))
 

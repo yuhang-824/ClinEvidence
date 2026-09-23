@@ -97,7 +97,8 @@
                     <span v-if="chunk.metadata?.chunk_index !== undefined" class="metadata-item">
                       <strong>块索引:</strong> {{ chunk.metadata.chunk_index }}
                     </span>
-                    <span v-if="chunk.distance !== undefined" class="metadata-item">
+                    <!-- 距离只在有相似度时展示:混合检索里仅 BM25 命中的结果没有余弦距离,避免混入 BM25 原始分 -->
+                    <span v-if="chunk.distance !== undefined && chunk.score" class="metadata-item">
                       <strong>距离:</strong> {{ chunk.distance.toFixed(4) }}
                     </span>
                   </div>

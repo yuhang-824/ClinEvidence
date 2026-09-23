@@ -1,11 +1,14 @@
 /**
  * 片段相关度的排序依据与分数标注。
  *
- * 检索结果里 `score` 是向量/混合分，`rerank_score` 是重排分；启用重排时列表顺序由重排分
- * 决定，展示与排序都应以它为准，否则用户读到的"相关度降序"不是生成回答时的排序。
- * 排序依据按整组判定：同一组里逐条各取一种分数会混用两种量纲，把顺序排乱。
- * 重排是每个知识库自己的查询参数（`use_reranker`），所以"组"应当是同一个知识库的结果，
- * 而不是一次回答合并后的全部片段——跨库统一判定会让没开重排的库整体失去可比分数。
+ * 检索结果里 `score` 是向量相似度，`rrf_score` 是向量+BM25 混合检索的 RRF 融合排序分
+ * （只表达多路共识，不是相似度），`rerank_score` 是重排分；列表顺序依据按
+ * 重排分 > 融合分 > 相似度取第一个整组存在的分数，展示与排序都应以它为准，
+ * 否则用户读到的"相关度降序"不是生成回答时的排序。
+ * 排序依据按整组判定：同一组里逐条各取一种分数会混用量纲，把顺序排乱。
+ * 重排与混合检索都是每个知识库自己的查询参数（`use_reranker` / `search_mode`），
+ * 所以"组"应当是同一个知识库的结果，而不是一次回答合并后的全部片段——
+ * 跨库统一判定会让没开重排或混合检索的库整体失去可比分数。
  */
 
 /** 该组片段是否按重排分排序（重排作用于整组结果，不会只覆盖一部分）。 */
@@ -13,18 +16,29 @@ export function usesRerankScore(chunks) {
   return Array.isArray(chunks) && chunks.some((chunk) => typeof chunk?.rerank_score === 'number')
 }
 
+/** 该组片段是否按 RRF 融合分排序（混合检索且未启用重排时）。 */
+export function usesFusionScore(chunks) {
+  return Array.isArray(chunks) && chunks.some((chunk) => typeof chunk?.rrf_score === 'number')
+}
+
 /** 取该片段在给定排序依据下的分数；缺失返回 null（排序时排最后）。 */
-export function effectiveScore(chunk, useRerank = false) {
-  const value = useRerank ? chunk?.rerank_score : chunk?.score
+export function effectiveScore(chunk, useRerank = false, useFusion = false) {
+  const value = useRerank ? chunk?.rerank_score : useFusion ? chunk?.rrf_score : chunk?.score
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/** 按整组存在与否判定排序依据：重排分优先，其次融合分，最后相似度。 */
+function scoreBasis(list) {
+  const useRerank = usesRerankScore(list)
+  return { useRerank, useFusion: !useRerank && usesFusionScore(list) }
 }
 
 /** 按该组生效的相关度降序返回新数组，不修改入参。 */
 export function sortChunksByScore(chunks) {
   const list = Array.isArray(chunks) ? [...chunks] : []
-  const useRerank = usesRerankScore(list)
+  const { useRerank, useFusion } = scoreBasis(list)
   const rank = (chunk) => {
-    const score = effectiveScore(chunk, useRerank)
+    const score = effectiveScore(chunk, useRerank, useFusion)
     return score === null ? Number.NEGATIVE_INFINITY : score
   }
   return list.sort((a, b) => rank(b) - rank(a))
@@ -33,9 +47,9 @@ export function sortChunksByScore(chunks) {
 /** 列表按哪种分数排序，用于给列表加标注；没有任何分数时返回空串（列表没按分数排）。 */
 export function scoreSourceLabel(chunks) {
   const list = Array.isArray(chunks) ? chunks : []
-  const useRerank = usesRerankScore(list)
-  if (!list.some((chunk) => effectiveScore(chunk, useRerank) !== null)) return ''
-  return useRerank ? '重排分' : '相似度'
+  const { useRerank, useFusion } = scoreBasis(list)
+  if (!list.some((chunk) => effectiveScore(chunk, useRerank, useFusion) !== null)) return ''
+  return useRerank ? '重排分' : useFusion ? '融合分' : '相似度'
 }
 
 /**

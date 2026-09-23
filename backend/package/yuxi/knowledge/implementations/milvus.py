@@ -8,14 +8,12 @@ from functools import partial
 from typing import Any
 
 from pymilvus import (
-    AnnSearchRequest,
     Collection,
     CollectionSchema,
     DataType,
     FieldSchema,
     Function,
     FunctionType,
-    WeightedRanker,
     connections,
     db,
     utility,
@@ -25,6 +23,7 @@ from yuxi.config.options import system_options
 from yuxi.knowledge.base import FileStatus, KnowledgeBase
 from yuxi.knowledge.chunking.ragflow_like.dispatcher import chunk_markdown
 from yuxi.knowledge.chunking.ragflow_like.nlp import count_tokens
+from yuxi.knowledge.rank_fusion import reciprocal_rank_fusion
 from yuxi.knowledge.read_models import KnowledgeBaseConfig
 from yuxi.knowledge.utils.kb_utils import resolve_processing_params
 from yuxi.models.providers.cache import model_cache
@@ -91,7 +90,7 @@ class MilvusRetrievalConfig:
             "options": [
                 {"value": "vector", "label": "向量检索", "description": "仅使用向量相似度检索"},
                 {"value": "keyword", "label": "BM25 全文检索", "description": "仅使用 Milvus BM25 检索"},
-                {"value": "hybrid", "label": "混合检索", "description": "Milvus 向量检索与 BM25 融合检索"},
+                {"value": "hybrid", "label": "混合检索", "description": "Milvus 向量检索与 BM25 经 RRF 倒数排名融合"},
             ],
             "description": "选择检索模式",
         },
@@ -125,28 +124,6 @@ class MilvusRetrievalConfig:
             "min": 1,
             "max": 200,
             "description": "BM25 全文检索和混合检索中的 BM25 候选数量",
-        },
-    )
-    vector_weight: float = field(
-        default=0.7,
-        metadata={
-            "label": "向量检索权重",
-            "type": "number",
-            "min": 0.0,
-            "max": 1.0,
-            "step": 0.1,
-            "description": "混合检索中向量召回结果的融合权重",
-        },
-    )
-    bm25_weight: float = field(
-        default=0.3,
-        metadata={
-            "label": "BM25 权重",
-            "type": "number",
-            "min": 0.0,
-            "max": 1.0,
-            "step": 0.1,
-            "description": "混合检索中 BM25 召回结果的融合权重",
         },
     )
     bm25_drop_ratio_search: float = field(
@@ -846,25 +823,16 @@ class MilvusKB(KnowledgeBase):
                 embedding_function = self._get_embedding_function(embedding_model_spec, sync=True)
                 query_embedding = await _run_milvus_query_io(embedding_function, [query_text])
 
-                search_params = {"metric_type": metric_type, "params": {"nprobe": 10}}
-
-                results = await _run_milvus_query_io(
-                    collection.search,
-                    data=query_embedding,
-                    anns_field="embedding",
-                    param=search_params,
+                retrieved_chunks = await self._dense_search_chunks(
+                    collection=collection,
+                    query_embedding=query_embedding,
+                    metric_type=metric_type,
                     limit=recall_top_k,
                     expr=file_expr,
                     output_fields=output_fields,
+                    include_distances=include_distances,
+                    similarity_threshold=similarity_threshold,
                 )
-
-                if results and len(results) > 0 and len(results[0]) > 0:
-                    for hit in results[0]:
-                        similarity = hit.distance if metric_type == VECTOR_METRIC_TYPE else 1 / (1 + hit.distance)
-                        if similarity < similarity_threshold:
-                            continue
-
-                        retrieved_chunks.append(self._build_chunk_from_hit(hit, similarity, include_distances))
 
                 logger.debug(
                     f"Milvus vector query response: {len(retrieved_chunks)} chunks found (after similarity filtering)"
@@ -874,69 +842,46 @@ class MilvusKB(KnowledgeBase):
                 bm25_top_k = int(merged_kwargs.get("bm25_top_k", recall_top_k))
                 bm25_top_k = max(bm25_top_k, 1)
                 bm25_drop_ratio_search = float(merged_kwargs.get("bm25_drop_ratio_search", 0.0))
-                bm25_search_params = {
-                    "metric_type": "BM25",
-                    "params": {"drop_ratio_search": bm25_drop_ratio_search},
-                }
 
-                results = await _run_milvus_query_io(
-                    collection.search,
-                    data=[query_text],
-                    anns_field=CONTENT_SPARSE_FIELD,
-                    param=bm25_search_params,
+                retrieved_chunks = await self._sparse_search_chunks(
+                    collection=collection,
+                    query_text=query_text,
                     limit=bm25_top_k,
                     expr=file_expr,
                     output_fields=output_fields,
+                    include_distances=include_distances,
+                    bm25_drop_ratio_search=bm25_drop_ratio_search,
                 )
-
-                if results and len(results) > 0 and len(results[0]) > 0:
-                    for hit in results[0]:
-                        retrieved_chunks.append(
-                            self._build_chunk_from_hit(hit, hit.distance, include_distances, score_field="bm25_score")
-                        )
-
                 logger.debug(f"Milvus BM25 query response: {len(retrieved_chunks)} chunks found")
             else:
-                embedding_function = self._get_embedding_function(embedding_model_spec, sync=True)
-                query_embedding = await _run_milvus_query_io(embedding_function, [query_text])
                 bm25_top_k = int(merged_kwargs.get("bm25_top_k", recall_top_k))
                 bm25_top_k = max(bm25_top_k, 1)
                 bm25_drop_ratio_search = float(merged_kwargs.get("bm25_drop_ratio_search", 0.0))
-                vector_weight = float(merged_kwargs.get("vector_weight", 0.7))
-                bm25_weight = float(merged_kwargs.get("bm25_weight", 0.3))
+                embedding_function = self._get_embedding_function(embedding_model_spec, sync=True)
+                query_embedding = await _run_milvus_query_io(embedding_function, [query_text])
 
-                vector_request = AnnSearchRequest(
-                    data=query_embedding,
-                    anns_field="embedding",
-                    param={"metric_type": metric_type, "params": {"nprobe": 10}},
+                # 双路各自检索后在应用层做 RRF 融合:similarity_threshold 门控作用于向量路
+                # 的余弦相似度(融合前),RRF 融合分只决定排序,不再承担质量门控语义
+                dense_chunks = await self._dense_search_chunks(
+                    collection=collection,
+                    query_embedding=query_embedding,
+                    metric_type=metric_type,
                     limit=recall_top_k,
                     expr=file_expr,
+                    output_fields=output_fields,
+                    include_distances=include_distances,
+                    similarity_threshold=similarity_threshold,
                 )
-                bm25_request = AnnSearchRequest(
-                    data=[query_text],
-                    anns_field=CONTENT_SPARSE_FIELD,
-                    param={
-                        "metric_type": "BM25",
-                        "params": {"drop_ratio_search": bm25_drop_ratio_search},
-                    },
+                sparse_chunks = await self._sparse_search_chunks(
+                    collection=collection,
+                    query_text=query_text,
                     limit=bm25_top_k,
                     expr=file_expr,
-                )
-                results = await _run_milvus_query_io(
-                    collection.hybrid_search,
-                    reqs=[vector_request, bm25_request],
-                    rerank=WeightedRanker(vector_weight, bm25_weight),
-                    limit=recall_top_k,
                     output_fields=output_fields,
+                    include_distances=include_distances,
+                    bm25_drop_ratio_search=bm25_drop_ratio_search,
                 )
-                if results and len(results) > 0 and len(results[0]) > 0:
-                    for hit in results[0]:
-                        score = float(hit.distance or 0.0)
-                        if score < similarity_threshold:
-                            continue
-                        retrieved_chunks.append(
-                            self._build_chunk_from_hit(hit, score, include_distances, score_field="hybrid_score")
-                        )
+                retrieved_chunks = self._fuse_hybrid_chunks(dense_chunks, sparse_chunks)
 
                 logger.debug(f"Milvus hybrid query response: {len(retrieved_chunks)} chunks found")
 
@@ -968,8 +913,12 @@ class MilvusKB(KnowledgeBase):
                     for chunk, rerank_score in zip(retrieved_chunks, rerank_scores):
                         chunk["rerank_score"] = float(rerank_score)
 
+                    # 重排失败时回退到检索排序:混合检索保持 RRF 顺序,单路检索保持原分数顺序
                     retrieved_chunks.sort(
-                        key=lambda item: item.get("rerank_score", item.get("score", 0.0)), reverse=True
+                        key=lambda item: item.get(
+                            "rerank_score", item.get("rrf_score", item.get("score", 0.0))
+                        ),
+                        reverse=True,
                     )
                     elapsed = time.time() - rerank_start
                     logger.info(f"Reranking completed for {kb_id} in {elapsed:.3f}s with model {reranker_model}")
@@ -977,7 +926,7 @@ class MilvusKB(KnowledgeBase):
                     await reranker.aclose()
 
             except Exception as exc:  # noqa: BLE001
-                logger.error(f"Reranking failed: {exc}, falling back to vector scores")
+                logger.error(f"Reranking failed: {exc}, falling back to retrieval order scores")
 
             # 统一返回结果
             return retrieved_chunks[:final_top_k]
@@ -985,6 +934,101 @@ class MilvusKB(KnowledgeBase):
         except Exception as e:
             logger.error(f"Milvus query error: {e}, {traceback.format_exc()}")
             raise
+
+    async def _dense_search_chunks(
+        self,
+        *,
+        collection: Collection,
+        query_embedding: list[list[float]],
+        metric_type: str,
+        limit: int,
+        expr: str | None,
+        output_fields: list[str],
+        include_distances: bool,
+        similarity_threshold: float,
+    ) -> list[dict]:
+        """向量路检索:分数保持相似度口径,低于阈值的结果在融合前被门控掉。"""
+        search_params = {"metric_type": metric_type, "params": {"nprobe": 10}}
+        results = await _run_milvus_query_io(
+            collection.search,
+            data=query_embedding,
+            anns_field="embedding",
+            param=search_params,
+            limit=limit,
+            expr=expr,
+            output_fields=output_fields,
+        )
+        chunks: list[dict] = []
+        if results and len(results) > 0:
+            for hit in results[0]:
+                similarity = hit.distance if metric_type == VECTOR_METRIC_TYPE else 1 / (1 + hit.distance)
+                if similarity < similarity_threshold:
+                    continue
+                chunks.append(self._build_chunk_from_hit(hit, similarity, include_distances))
+        return chunks
+
+    async def _sparse_search_chunks(
+        self,
+        *,
+        collection: Collection,
+        query_text: str,
+        limit: int,
+        expr: str | None,
+        output_fields: list[str],
+        include_distances: bool,
+        bm25_drop_ratio_search: float,
+    ) -> list[dict]:
+        """BM25 稀疏路检索:BM25 分数无量纲,不做相似度门控。"""
+        search_params = {
+            "metric_type": "BM25",
+            "params": {"drop_ratio_search": bm25_drop_ratio_search},
+        }
+        results = await _run_milvus_query_io(
+            collection.search,
+            data=[query_text],
+            anns_field=CONTENT_SPARSE_FIELD,
+            param=search_params,
+            limit=limit,
+            expr=expr,
+            output_fields=output_fields,
+        )
+        chunks: list[dict] = []
+        if results and len(results) > 0:
+            for hit in results[0]:
+                chunks.append(
+                    self._build_chunk_from_hit(hit, hit.distance, include_distances, score_field="bm25_score")
+                )
+        return chunks
+
+    def _fuse_hybrid_chunks(self, dense_chunks: list[dict], sparse_chunks: list[dict]) -> list[dict]:
+        """应用层 RRF 融合双路 chunk。
+
+        `score` 保留向量路相似度口径;仅 BM25 命中的 chunk 没有余弦相似度,
+        移除其 `score` 避免把 BM25 分当相似度展示。排序只由 rrf_score 决定。
+        """
+        def route_keys(chunks: list[dict], prefix: str) -> list[str]:
+            return [
+                str((chunk.get("metadata") or {}).get("chunk_id") or f"{prefix}-{index}")
+                for index, chunk in enumerate(chunks)
+            ]
+
+        dense_keys = route_keys(dense_chunks, "dense")
+        sparse_keys = route_keys(sparse_chunks, "sparse")
+        rrf_scores = reciprocal_rank_fusion([dense_keys, sparse_keys])
+
+        merged: dict[str, dict] = {}
+        for key, chunk in zip(dense_keys, dense_chunks):
+            chunk["rrf_score"] = rrf_scores[key]
+            merged[key] = chunk
+        for key, chunk in zip(sparse_keys, sparse_chunks):
+            existing = merged.get(key)
+            if existing is not None:
+                existing["bm25_score"] = chunk["bm25_score"]
+                continue
+            chunk.pop("score", None)
+            chunk["rrf_score"] = rrf_scores[key]
+            merged[key] = chunk
+        return sorted(merged.values(), key=lambda item: item["rrf_score"], reverse=True)
 
     def _build_chunk_from_record(self, chunk: Any, score: float, score_field: str | None = None) -> dict:
         metadata = {

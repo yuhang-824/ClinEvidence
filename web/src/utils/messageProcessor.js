@@ -183,9 +183,11 @@ export class MessageProcessor {
       dedupSet.add(dedupKey)
 
       // 内置检索工具把分数放在 metadata 里（SearchResultSchema 顶层只有内容与标识），
-      // 这里补齐顶层字段，来源列表才能按相关度排序并显示相似度/重排分
+      // 这里补齐顶层字段，来源列表才能按相关度排序并显示相似度/重排分/融合分
       const score = typeof chunk.score === 'number' ? chunk.score : metadata.score
       const rerankScore = typeof chunk.rerank_score === 'number' ? chunk.rerank_score : metadata.rerank_score
+      const rrfScore = typeof chunk.rrf_score === 'number' ? chunk.rrf_score : metadata.rrf_score
+      const bm25Score = typeof chunk.bm25_score === 'number' ? chunk.bm25_score : metadata.bm25_score
       // 保留来源元数据：引用要展示页码与章节，来源面板也要能定位到 PDF 页
       const sourceMetadata =
         metadata.source_metadata && typeof metadata.source_metadata === 'object' ? metadata.source_metadata : null
@@ -194,6 +196,8 @@ export class MessageProcessor {
         content,
         score: typeof score === 'number' ? score : null,
         ...(typeof rerankScore === 'number' ? { rerank_score: rerankScore } : {}),
+        ...(typeof rrfScore === 'number' ? { rrf_score: rrfScore } : {}),
+        ...(typeof bm25Score === 'number' ? { bm25_score: bm25Score } : {}),
         metadata: {
           source: metadata.source || '',
           file_id: metadata.file_id || '',
@@ -360,11 +364,14 @@ export class MessageProcessor {
             content,
             document_id: typeof chunk.document_id === 'string' ? chunk.document_id : '',
             document_name: typeof chunk.document_name === 'string' ? chunk.document_name : '',
-            document_type: chunk.document_type || '',
+            document_type: typeof chunk.document_type === 'string' ? chunk.document_type : '',
             page_number: chunk.page_number,
             snapshot_id: chunk.snapshot_id || '',
             snapshot_sequence: chunk.snapshot_sequence,
-            score: typeof chunk.score === 'number' ? chunk.score : null
+            score: typeof chunk.score === 'number' ? chunk.score : null,
+            // 混合检索的融合排序分与 BM25 原始分;仅 BM25 命中的片段没有 score
+            ...(typeof chunk.rrf_score === 'number' ? { rrf_score: chunk.rrf_score } : {}),
+            ...(typeof chunk.bm25_score === 'number' ? { bm25_score: chunk.bm25_score } : {})
           })
         }
       }

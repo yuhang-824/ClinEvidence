@@ -111,7 +111,7 @@ async def search_patient_records(
     document_types: list[str] | None = None,
     runtime: ToolRuntime = None,
 ) -> str:
-    """在当前患者的已发布病历快照内做语义检索。
+    """在当前患者的已发布病历快照内做向量+BM25 混合检索。
 
     适用场景:
     1. 查找患者的诊断、检查、病理、治疗经过等具体事实
@@ -120,8 +120,9 @@ async def search_patient_records(
 
     返回结果:
     命中文块列表,含 content(原文内容)、document_name(所属病历文件)、
-    document_type(文书类型)、page_number(页码)、score(向量相似度)、
-    chunk_id(证据 ID,可用于 read_evidence_excerpt 回读)、
+    document_type(文书类型)、page_number(页码)、score(向量相似度,仅按
+    向量路命中的文块携带;仅 BM25 词面命中的文块无 score,排序由融合分
+    rrf_score 决定)、chunk_id(证据 ID,可用于 read_evidence_excerpt 回读)、
     snapshot_id(证据所属快照)。
 
     使用规范:

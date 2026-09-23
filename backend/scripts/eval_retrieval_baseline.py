@@ -74,7 +74,11 @@ async def eval_patient_channel(question: str, patient_key: str, evidence_file: s
                 doc_order.append(doc_id)
         embedding = await _embed_query(question)
         hits = await search_patient_chunks(
-            patient_id=patient.id, snapshot_members=members, query_embedding=embedding, top_k=top_k
+            patient_id=patient.id,
+            snapshot_members=members,
+            query_text=question,
+            query_embedding=embedding,
+            top_k=top_k,
         )
         hydrated = []
         for hit in hits:

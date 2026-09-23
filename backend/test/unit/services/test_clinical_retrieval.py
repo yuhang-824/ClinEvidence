@@ -179,7 +179,10 @@ async def test_search_drops_cross_patient_and_out_of_snapshot_hits(session, monk
     async def _fake_embed(query_text):
         return [0.1, 0.2]
 
+    captured_kwargs = {}
+
     async def _fake_search(*, patient_id, snapshot_members, query_embedding, top_k, **kwargs):
+        captured_kwargs.update(kwargs)
         return [
             {"chunk_id": "chunk-in", "score": 0.9},
             {"chunk_id": "chunk-out", "score": 0.8},
@@ -195,6 +198,8 @@ async def test_search_drops_cross_patient_and_out_of_snapshot_hits(session, monk
     assert [hit["chunk_id"] for hit in hits] == ["chunk-in"]
     assert hits[0]["document_name"] == "k1"
     assert hits[0]["score"] == 0.9
+    # 混合检索需要原始查询文本给 BM25 路;缺失会让稀疏路静默失效
+    assert captured_kwargs.get("query_text") == "症状"
 
 
 async def test_clinical_tool_schemas_expose_no_scope_parameters():

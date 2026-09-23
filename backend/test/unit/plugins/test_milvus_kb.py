@@ -29,14 +29,28 @@ def make_query_config() -> KnowledgeBaseConfig:
 
 
 class FakeHit:
-    def __init__(self, content: str, distance: float):
+    def __init__(self, content: str, distance: float, chunk_id: str = "chunk-1"):
         self.distance = distance
         self.entity = {
             "content": content,
-            "chunk_id": "chunk-1",
+            "chunk_id": chunk_id,
             "file_id": "file-1",
             "chunk_index": 0,
         }
+
+
+class RouteFakeCollection:
+    """按 anns_field 返回不同命中,模拟稠密路与稀疏路各自的检索结果。"""
+
+    def __init__(self, dense_hits: list[FakeHit], sparse_hits: list[FakeHit]):
+        self.dense_hits = dense_hits
+        self.sparse_hits = sparse_hits
+        self.search_calls = []
+
+    def search(self, **kwargs):
+        self.search_calls.append(kwargs)
+        hits = self.dense_hits if kwargs["anns_field"] == "embedding" else self.sparse_hits
+        return [hits]
 
 
 class FakeCollection:
@@ -710,53 +724,60 @@ async def test_vector_mode_ignores_metric_type_override():
     assert search_call["param"]["metric_type"] == VECTOR_METRIC_TYPE
 
 
-async def test_hybrid_mode_uses_milvus_native_hybrid_search():
-    collection = FakeCollection()
-    kb = make_kb(collection)
-    config = make_query_config()
-
-    chunks = await kb.aquery(
-        "hybrid query",
-        "db",
-        config=config,
-        search_mode="hybrid",
-        final_top_k=3,
-        bm25_top_k=8,
-        vector_weight=0.6,
-        bm25_weight=0.4,
+async def test_hybrid_mode_fuses_routes_with_rrf_and_keeps_similarity_scale():
+    """混合检索:双路各自检索后应用层 RRF 融合,score 保持向量相似度口径。"""
+    collection = RouteFakeCollection(
+        dense_hits=[
+            FakeHit("doc A", 0.92, chunk_id="chunk-a"),
+            FakeHit("doc B", 0.88, chunk_id="chunk-b"),
+        ],
+        sparse_hits=[
+            FakeHit("doc B", 15.3, chunk_id="chunk-b"),
+            FakeHit("doc C", 9.1, chunk_id="chunk-c"),
+        ],
     )
-
-    assert chunks[0]["content"] == "Hybrid result"
-    assert chunks[0]["hybrid_score"] == 0.8
-    hybrid_call = collection.hybrid_calls[0]
-    assert hybrid_call["limit"] == 3
-    assert hybrid_call["rerank"]._weights == [0.6, 0.4]
-
-    vector_request, bm25_request = hybrid_call["reqs"]
-    assert vector_request.anns_field == "embedding"
-    assert vector_request.data == [[0.1, 0.2]]
-    assert vector_request.param["metric_type"] == VECTOR_METRIC_TYPE
-    assert bm25_request.anns_field == CONTENT_SPARSE_FIELD
-    assert bm25_request.data == ["hybrid query"]
-    assert bm25_request.limit == 8
-    assert bm25_request.param["metric_type"] == "BM25"
-
-
-async def test_hybrid_mode_filters_scores_below_similarity_threshold():
-    collection = FakeCollection(distance=0.1)
     kb = make_kb(collection)
-    config = make_query_config()
+
+    chunks = await kb.aquery("hybrid query", "db", config=make_query_config(), search_mode="hybrid")
+
+    # 两路共识的 chunk-b 排第一,整体顺序由 rrf_score 决定
+    assert [chunk["metadata"]["chunk_id"] for chunk in chunks] == ["chunk-b", "chunk-a", "chunk-c"]
+    assert chunks[0]["score"] == 0.88
+    assert chunks[0]["bm25_score"] == 15.3
+    assert chunks[0]["rrf_score"] == pytest.approx(1 / 61 + 1 / 62)
+    assert chunks[1]["rrf_score"] == pytest.approx(1 / 61)
+    # 仅 BM25 命中的 chunk 没有余弦相似度,不伪造 score
+    assert "score" not in chunks[2]
+    assert chunks[2]["bm25_score"] == 9.1
+
+    dense_call, sparse_call = collection.search_calls
+    assert dense_call["anns_field"] == "embedding"
+    assert dense_call["data"] == [[0.1, 0.2]]
+    assert sparse_call["anns_field"] == CONTENT_SPARSE_FIELD
+    assert sparse_call["data"] == ["hybrid query"]
+
+
+async def test_hybrid_mode_threshold_gates_dense_route_only():
+    """相似度门控作用于向量路的余弦相似度;仅 BM25 命中的结果不被融合分误杀。"""
+    collection = RouteFakeCollection(
+        dense_hits=[FakeHit("weak dense", 0.1, chunk_id="chunk-a")],
+        sparse_hits=[FakeHit("bm25 hit", 12.0, chunk_id="chunk-a")],
+    )
+    kb = make_kb(collection)
 
     chunks = await kb.aquery(
         "hybrid query",
         "db",
-        config=config,
+        config=make_query_config(),
         search_mode="hybrid",
-        final_top_k=3,
         similarity_threshold=0.2,
     )
 
-    assert chunks == []
+    # 向量路 0.1 低于阈值被门控;BM25 路仍召回同一 chunk,无相似度分,只按单路名次参与融合
+    assert len(chunks) == 1
+    assert "score" not in chunks[0]
+    assert chunks[0]["bm25_score"] == 12.0
+    assert chunks[0]["rrf_score"] == pytest.approx(1 / 61)
 
 
 def test_query_params_config_uses_bm25_parameters():
@@ -767,12 +788,10 @@ def test_query_params_config_uses_bm25_parameters():
     option_keys = {option["key"] for option in config["options"]}
     assert "keyword_top_k" not in option_keys
     assert "metric_type" not in option_keys
-    assert {
-        "bm25_top_k",
-        "vector_weight",
-        "bm25_weight",
-        "bm25_drop_ratio_search",
-    } <= option_keys
+    # 加权融合已移除:权重配置不得再出现,防止误以为还能调 WeightedRanker
+    assert "vector_weight" not in option_keys
+    assert "bm25_weight" not in option_keys
+    assert {"bm25_top_k", "bm25_drop_ratio_search"} <= option_keys
 
     search_mode = next(option for option in config["options"] if option["key"] == "search_mode")
     descriptions = {option["value"]: option["description"] for option in search_mode["options"]}

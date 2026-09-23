@@ -1,18 +1,23 @@
-"""患者文块的 Milvus 投影:写入、快照作用域检索、发布回读核对与孤儿向量清理。
+"""患者文块的 Milvus 投影:写入、快照作用域混合检索、发布回读核对与孤儿向量清理。
 
 患者共享 collection,按 embedding generation 管理;过滤条件一律由服务端从
-Run 绑定的快照 manifest 构造,不接受模型或浏览器透传。Milvus 命中本身不能
-证明证据有效,回读 PostgreSQL 才能引用。
+Run 绑定的快照 manifest 构造,不接受模型或浏览器透传。检索为向量+BM25 双路
+各自检索后应用层 RRF 融合:`score` 保持向量路余弦相似度口径(前端相似度展示
+依赖该前提),最终顺序由 rrf_score 决定。Milvus 命中本身不能证明证据有效,
+回读 PostgreSQL 才能引用。
 """
 
 from __future__ import annotations
 
 import asyncio
 
+from yuxi.knowledge.rank_fusion import DEFAULT_RRF_K, reciprocal_rank_fusion
 from yuxi.utils.logging_config import logger
 
 PATIENT_COLLECTION_PREFIX = "patient_records"
+PATIENT_SPARSE_FIELD = "content_sparse"
 _DIM = 1024  # 默认向量维度;创建 collection 时以 embedding 配置为准
+_CONTENT_ANALYZER_PARAMS = {"type": "chinese"}
 
 
 def collection_name(generation: int = 1) -> str:
@@ -36,14 +41,13 @@ def _connect():
     return alias
 
 
-def ensure_patient_collection(embedding_dim: int = _DIM, generation: int = 1):
-    """创建或返回患者共享 collection;字段与计划 7.1 一致。"""
-    from pymilvus import Collection, CollectionSchema, DataType, FieldSchema, utility
+def _build_patient_schema(embedding_dim: int):
+    """构建含 BM25 稀疏投影的患者 collection schema。
 
-    alias = _connect()
-    name = collection_name(generation)
-    if utility.has_collection(name, using=alias):
-        return Collection(name, using=alias)
+    `content` 只服务于 Milvus 内置 BM25 的稀疏向量生成;文块内容真值在
+    PostgreSQL,Milvus 内的副本不作为引用依据。
+    """
+    from pymilvus import CollectionSchema, DataType, FieldSchema, Function, FunctionType
 
     fields = [
         FieldSchema(name="chunk_id", dtype=DataType.VARCHAR, max_length=64, is_primary=True),
@@ -56,12 +60,82 @@ def ensure_patient_collection(embedding_dim: int = _DIM, generation: int = 1):
         FieldSchema(name="index_generation", dtype=DataType.INT64),
         FieldSchema(name="document_type", dtype=DataType.VARCHAR, max_length=64),
         FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=embedding_dim),
+        FieldSchema(
+            name="content",
+            dtype=DataType.VARCHAR,
+            max_length=65535,
+            enable_analyzer=True,
+            analyzer_params=_CONTENT_ANALYZER_PARAMS,
+        ),
+        FieldSchema(name=PATIENT_SPARSE_FIELD, dtype=DataType.SPARSE_FLOAT_VECTOR),
     ]
-    schema = CollectionSchema(fields, description="ClinEvidence patient record chunks")
-    collection = Collection(name, schema, using=alias)
+    bm25_function = Function(
+        name="content_bm25",
+        input_field_names=["content"],
+        output_field_names=[PATIENT_SPARSE_FIELD],
+        function_type=FunctionType.BM25,
+    )
+    return CollectionSchema(
+        fields,
+        description="ClinEvidence patient record chunks",
+        functions=[bm25_function],
+    )
+
+
+def _patient_collection_supports_hybrid(collection) -> bool:
+    """检查患者 collection 是否具备 BM25 稀疏投影所需的 schema。"""
+    from pymilvus import DataType, FunctionType
+
+    fields = {field.name: field for field in collection.schema.fields}
+    content_field = fields.get("content")
+    sparse_field = fields.get(PATIENT_SPARSE_FIELD)
+    if not content_field or content_field.dtype != DataType.VARCHAR:
+        return False
+    if (content_field.params or {}).get("enable_analyzer") is not True:
+        return False
+    if not sparse_field or sparse_field.dtype != DataType.SPARSE_FLOAT_VECTOR:
+        return False
+
+    return any(
+        function.type == FunctionType.BM25
+        and function.input_field_names == ["content"]
+        and function.output_field_names == [PATIENT_SPARSE_FIELD]
+        for function in collection.schema.functions
+    )
+
+
+def ensure_patient_collection(embedding_dim: int = _DIM, generation: int = 1):
+    """创建或返回患者共享 collection。
+
+    存量 collection 若缺 BM25 稀疏投影则重建(与文档知识库同策略):向量是
+    PG 的派生数据,重建后检索返回空,需重新执行索引写入(重新发布)恢复。
+    """
+    from pymilvus import Collection, utility
+
+    alias = _connect()
+    name = collection_name(generation)
+    if utility.has_collection(name, using=alias):
+        collection = Collection(name, using=alias)
+        if _patient_collection_supports_hybrid(collection):
+            return collection
+        logger.warning(
+            f"Patient collection {name} schema does not support BM25, recreating; "
+            "re-publish snapshots to restore the vector projection"
+        )
+        utility.drop_collection(name, using=alias)
+
+    collection = Collection(name, schema=_build_patient_schema(embedding_dim), using=alias)
     collection.create_index(
         "embedding",
         {"index_type": "AUTOINDEX", "metric_type": "IP", "params": {}},
+    )
+    collection.create_index(
+        PATIENT_SPARSE_FIELD,
+        {
+            "metric_type": "BM25",
+            "index_type": "SPARSE_INVERTED_INDEX",
+            "params": {"inverted_index_algo": "DAAT_MAXSCORE"},
+        },
     )
     return collection
 
@@ -85,6 +159,7 @@ async def insert_patient_chunks(records: list[dict], generation: int = 1) -> int
                 [int(record.get("index_generation") or 1) for record in records],
                 [record.get("document_type") or "" for record in records],
                 [record["embedding"] for record in records],
+                [record["content"] for record in records],
             ]
         )
         collection.flush()
@@ -111,43 +186,97 @@ def _snapshot_filter(patient_id: str, members: list[dict]) -> str:
     return f'patient_id == {_quote(patient_id)} and ({" or ".join(clauses)})'
 
 
+def _fuse_patient_hits(dense_hits: list[dict], sparse_hits: list[dict], k: int = DEFAULT_RRF_K) -> list[dict]:
+    """RRF 融合双路命中并按融合分降序。
+
+    `score` 只保留向量路余弦相似度(仅稠密路命中的文块携带);仅 BM25 命中的
+    文块不伪造相似度,原始 BM25 分放入 `bm25_score`。
+    """
+    rrf_scores = reciprocal_rank_fusion(
+        [
+            [str(hit["chunk_id"]) for hit in dense_hits],
+            [str(hit["chunk_id"]) for hit in sparse_hits],
+        ],
+        k=k,
+    )
+
+    merged: dict[str, dict] = {}
+    for hit in dense_hits:
+        key = str(hit["chunk_id"])
+        hit["rrf_score"] = rrf_scores[key]
+        merged[key] = hit
+    for hit in sparse_hits:
+        key = str(hit["chunk_id"])
+        existing = merged.get(key)
+        if existing is not None:
+            existing["bm25_score"] = hit["score"]
+            continue
+        hit["bm25_score"] = hit.pop("score")
+        hit["rrf_score"] = rrf_scores[key]
+        merged[key] = hit
+    return sorted(merged.values(), key=lambda item: item["rrf_score"], reverse=True)
+
+
 async def search_patient_chunks(
     *,
     patient_id: str,
     snapshot_members: list[dict],
+    query_text: str,
     query_embedding: list[float],
     top_k: int = 8,
     generation: int = 1,
 ) -> list[dict]:
-    """在当前 Run 快照的成员(版本+修订+索引代)内检索;返回命中 chunk_id 与分数。"""
+    """在当前 Run 快照的成员(版本+修订+索引代)内做向量+BM25 双路检索并 RRF 融合。
+
+    融合后按 rrf_score 降序截断回 top_k,保持调用方工具契约的条数语义。
+    """
     if not snapshot_members:
         return []
     collection = await asyncio.to_thread(ensure_patient_collection, len(query_embedding), generation)
+    expr = _snapshot_filter(patient_id, snapshot_members)
+    output_fields = ["chunk_id", "document_version_id", "document_type"]
 
-    def _search() -> list[dict]:
+    def _search_routes() -> tuple[list[dict], list[dict]]:
         collection.load()
-        results = collection.search(
-            data=[query_embedding],
-            anns_field="embedding",
-            param={"metric_type": "IP", "params": {"nprobe": 16}},
-            limit=top_k,
-            expr=_snapshot_filter(patient_id, snapshot_members),
-            output_fields=["chunk_id", "document_version_id", "document_type"],
-        )
-        hits = []
-        for row in results:
-            for hit in row:
-                hits.append(
-                    {
-                        "chunk_id": hit.entity.get("chunk_id") or hit.id,
-                        "document_version_id": hit.entity.get("document_version_id"),
-                        "document_type": hit.entity.get("document_type"),
-                        "score": float(hit.score),
-                    }
-                )
-        return hits
 
-    return await asyncio.to_thread(_search)
+        def _collect(route_results) -> list[dict]:
+            hits = []
+            for row in route_results:
+                for hit in row:
+                    hits.append(
+                        {
+                            "chunk_id": hit.entity.get("chunk_id") or hit.id,
+                            "document_version_id": hit.entity.get("document_version_id"),
+                            "document_type": hit.entity.get("document_type"),
+                            "score": float(hit.score),
+                        }
+                    )
+            return hits
+
+        dense_hits = _collect(
+            collection.search(
+                data=[query_embedding],
+                anns_field="embedding",
+                param={"metric_type": "IP", "params": {"nprobe": 16}},
+                limit=top_k,
+                expr=expr,
+                output_fields=output_fields,
+            )
+        )
+        sparse_hits = _collect(
+            collection.search(
+                data=[query_text],
+                anns_field=PATIENT_SPARSE_FIELD,
+                param={"metric_type": "BM25", "params": {"drop_ratio_search": 0.0}},
+                limit=top_k,
+                expr=expr,
+                output_fields=output_fields,
+            )
+        )
+        return dense_hits, sparse_hits
+
+    dense_hits, sparse_hits = await asyncio.to_thread(_search_routes)
+    return _fuse_patient_hits(dense_hits, sparse_hits)[:top_k]
 
 
 async def fetch_stored_chunk_ids(chunk_ids: list[str], generation: int = 1) -> set[str]:

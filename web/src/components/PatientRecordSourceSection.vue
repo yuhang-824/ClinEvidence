@@ -41,8 +41,18 @@ const props = defineProps({
 const chunksModalVisible = ref(false)
 const selectedGroup = ref(null)
 
-// 按病历文件聚合检索片段;文件按最高相似度排序,组内保持检索相关度顺序,
-// 与知识库来源的分组展示保持同一交互口径
+// 按病历文件聚合检索片段;文件按最高相关度排序,组内保持检索相关度顺序,
+// 与知识库来源的分组展示保持同一交互口径。
+// 混合检索时片段带 rrf_score(多路共识排序分,不是相似度),整组改用它排序,
+// 避免与相似度混用量纲;纯向量检索仍按相似度。
+const usesFusionOrder = computed(() =>
+  props.chunks.some((chunk) => typeof chunk?.rrf_score === 'number' && Number.isFinite(chunk.rrf_score))
+)
+const relevanceScore = (chunk) => {
+  const value = usesFusionOrder.value ? chunk?.rrf_score : chunk?.score
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
 const documentGroups = computed(() => {
   const groups = new Map()
   for (const chunk of props.chunks) {
@@ -56,8 +66,9 @@ const documentGroups = computed(() => {
     }
     const group = groups.get(key)
     group.chunks.push(chunk)
-    if (typeof chunk.score === 'number' && Number.isFinite(chunk.score)) {
-      group.bestScore = group.bestScore === null ? chunk.score : Math.max(group.bestScore, chunk.score)
+    const score = relevanceScore(chunk)
+    if (score !== null) {
+      group.bestScore = group.bestScore === null ? score : Math.max(group.bestScore, score)
     }
   }
   return Array.from(groups.values()).sort((a, b) => {

@@ -142,6 +142,7 @@ async def search_patient_records_view(
     hits = await search_patient_chunks(
         patient_id=scope["patient"].id,
         snapshot_members=members,
+        query_text=normalized_query,
         query_embedding=embedding,
         top_k=top_k,
     )
@@ -224,6 +225,8 @@ async def _hydrate_chunks(db: AsyncSession, scope: dict, hits: list[dict], *, do
                 "char_start": chunk.char_start,
                 "char_end": chunk.char_end,
                 "score": hit.get("score"),
+                "rrf_score": hit.get("rrf_score"),
+                "bm25_score": hit.get("bm25_score"),
                 "patient_id": chunk.patient_id,
                 "snapshot_id": scope["snapshot"].id,
                 "snapshot_sequence": scope["snapshot"].sequence,

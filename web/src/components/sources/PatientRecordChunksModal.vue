@@ -27,7 +27,7 @@
         <div class="chunk-summary" aria-label="片段数量">
           <strong>{{ chunks.length }}</strong>
           <span>个片段</span>
-          <span v-if="hasScores" class="chunk-ordering">按相似度降序</span>
+          <span v-if="hasScores" class="chunk-ordering">{{ orderingLabel }}</span>
         </div>
         <button
           type="button"
@@ -112,9 +112,12 @@ const visible = computed({
   set: (value) => emit('update:open', value)
 })
 
-const hasScores = computed(() => props.chunks.some((chunk) => hasScore(chunk.score)))
-
 const hasScore = (value) => typeof value === 'number' && Number.isFinite(value)
+
+// 混合检索时列表顺序由 RRF 融合分决定,不是相似度降序;标注必须与真实排序一致
+const usesFusionOrder = computed(() => props.chunks.some((chunk) => hasScore(chunk.rrf_score)))
+const hasScores = computed(() => props.chunks.some((chunk) => hasScore(chunk.score)) || usesFusionOrder.value)
+const orderingLabel = computed(() => (usesFusionOrder.value ? '按融合相关度排序' : '按相似度降序'))
 
 // 患者向量使用归一化 embedding 的内积检索,分数即余弦相似度,与知识库同一展示口径
 const formatScore = (value) => `${(value * 100).toFixed(1)}%`
