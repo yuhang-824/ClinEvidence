@@ -4,7 +4,11 @@ from pydantic import BaseModel, Field
 
 
 class SearchInputSchema(BaseModel):
-    kb_id: str = Field(description="知识库资源 ID，也就是 kb_id")
+    # kb_id 可省略:会话仅启用一个知识库时由服务端自动解析,模型不需要也不必知道资源 ID
+    kb_id: str | None = Field(
+        default=None,
+        description="知识库资源 ID;会话仅启用一个知识库时可省略,多个时从 list_kbs 结果中选择",
+    )
     query_text: str = Field(description="检索关键词，应提炼为有助于召回答案的关键词或短语")
     file_name: str | None = Field(default=None, description="可选文件名关键词过滤，非必要不要使用")
 

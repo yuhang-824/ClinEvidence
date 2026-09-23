@@ -147,25 +147,39 @@ QueryKBInput = SearchInputSchema
 
 
 @tool(category="knowledge", tags=["知识库"], display_name="检索知识库", args_schema=QueryKBInput)
-async def query_kb(kb_id: str, query_text: str, file_name: str | None = None, runtime: ToolRuntime = None) -> Any:
-    """在指定知识库中检索内容
+async def query_kb(kb_id: str | None = None, query_text: str = "", file_name: str | None = None, runtime: ToolRuntime = None) -> Any:
+    """在知识库中检索内容
 
-    当用户需要查询具体内容时使用此工具。kb_id 是知识库资源 ID，也就是 kb_id；返回结果中的
-    file_id 可继续用于 find_kb_document 或 open_kb_document。
+    当用户需要查询具体内容时使用此工具。kb_id 可省略:当前会话只启用一个知识库时
+    由服务端自动解析;启用多个知识库时会返回列表,请从中选择 kb_id 后重试。
+    返回结果中的 file_id 可继续用于 find_kb_document 或 open_kb_document。
     """
-    if not kb_id:
-        return "请提供 kb_id"
-    if not query_text:
+    normalized_query = str(query_text or "").strip()
+    if not normalized_query:
         return "请提供查询内容"
 
     visible_kbs = await _resolve_visible_knowledge_bases_for_query(runtime)
-    target_kb_id, target_error = _find_query_target(kb_id=kb_id, visible_kbs=visible_kbs)
+    normalized_kb_id = str(kb_id or "").strip()
+    if not normalized_kb_id:
+        # 缺省 kb_id 由服务端从会话启用的知识库解析;多库时不猜测,交给模型选择
+        if not visible_kbs:
+            return "当前会话没有启用的知识库,无法检索"
+        if len(visible_kbs) > 1:
+            return {
+                "message": "当前会话启用了多个知识库,请指定 kb_id 后重新检索",
+                "knowledge_bases": [
+                    {"kb_id": kb.get("kb_id"), "name": kb.get("name", "")} for kb in visible_kbs
+                ],
+            }
+        normalized_kb_id = str(visible_kbs[0].get("kb_id") or "").strip()
+
+    target_kb_id, target_error = _find_query_target(kb_id=normalized_kb_id, visible_kbs=visible_kbs)
     if target_error:
         return target_error
 
     try:
         kwargs = {"file_name": file_name} if file_name else {}
-        return await _get_knowledge_base().retrieve(target_kb_id, query_text, **kwargs)
+        return await _get_knowledge_base().retrieve(target_kb_id, normalized_query, **kwargs)
     except Exception as e:
         logger.error(f"检索失败: {e}")
         return f"检索失败: {str(e)}"

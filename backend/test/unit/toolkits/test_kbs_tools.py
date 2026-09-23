@@ -909,3 +909,64 @@ def _async_get_file_download(content: bytes, filename: str):
         }
 
     return _impl
+
+
+@pytest.mark.asyncio
+async def test_query_kb_resolves_single_enabled_kb_when_kb_id_omitted(monkeypatch) -> None:
+    """模型省略 kb_id 且会话仅启用一个知识库时,服务端自动解析,不再抛 Field required。"""
+    async def _fake_retriever(query_text: str, **kwargs):
+        assert query_text == "auth"
+        return KnowledgeBase.build_search_output("db-1", [{"content": "auth guide", "metadata": {}}])
+
+    _patch_retrievers(monkeypatch, retriever=_fake_retriever)
+    monkeypatch.setattr(tools, "_resolve_visible_knowledge_bases_for_query", _fake_visible_kbs)
+
+    result = await _run_query_kb(query_text="auth", runtime=SimpleNamespace(context=SimpleNamespace()))
+
+    assert result["kb_id"] == "db-1"
+    assert result["results"][0]["content"] == "auth guide"
+
+
+@pytest.mark.asyncio
+async def test_query_kb_rejects_kb_id_outside_visible_scope(monkeypatch) -> None:
+    """schema 放宽 kb_id 后,显式传入可见范围之外的 kb_id 仍必须被拒绝。"""
+    _patch_retrievers(monkeypatch)
+    monkeypatch.setattr(tools, "_resolve_visible_knowledge_bases_for_query", _fake_visible_kbs)
+
+    result = await _run_query_kb(kb_id="db-other", query_text="auth", runtime=SimpleNamespace(context=SimpleNamespace()))
+
+    assert result == "知识库资源 'db-other' 不存在或当前会话未启用"
+
+
+@pytest.mark.asyncio
+async def test_query_kb_lists_choices_when_multiple_kbs_enabled(monkeypatch) -> None:
+    """多个启用知识库时不猜测目标,返回 kb_id 列表交给模型选择。"""
+    _patch_retrievers(monkeypatch)
+
+    async def _multi_visible_kbs(runtime):
+        del runtime
+        return [
+            {"kb_id": "db-1", "name": "指南库", "kb_type": "milvus"},
+            {"kb_id": "db-2", "name": "文献库", "kb_type": "milvus"},
+        ]
+
+    monkeypatch.setattr(tools, "_resolve_visible_knowledge_bases_for_query", _multi_visible_kbs)
+
+    result = await _run_query_kb(query_text="auth", runtime=SimpleNamespace(context=SimpleNamespace()))
+
+    assert result["message"] == "当前会话启用了多个知识库,请指定 kb_id 后重新检索"
+    assert {"kb_id": "db-1", "name": "指南库"} in result["knowledge_bases"]
+    assert {"kb_id": "db-2", "name": "文献库"} in result["knowledge_bases"]
+
+
+@pytest.mark.asyncio
+async def test_query_kb_reports_missing_kb_when_none_enabled(monkeypatch) -> None:
+    async def _no_visible_kbs(runtime):
+        del runtime
+        return []
+
+    monkeypatch.setattr(tools, "_resolve_visible_knowledge_bases_for_query", _no_visible_kbs)
+
+    result = await _run_query_kb(query_text="auth", runtime=SimpleNamespace(context=SimpleNamespace()))
+
+    assert result == "当前会话没有启用的知识库,无法检索"
